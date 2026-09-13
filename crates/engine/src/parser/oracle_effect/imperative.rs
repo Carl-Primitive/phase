@@ -12486,7 +12486,7 @@ fn count_ticket_symbols(rest: &str) -> Option<u32> {
 /// The recipient is NOT decided here. "each opponent" is carried on the
 /// enclosing `AbilityDefinition` as `player_scope: Some(PlayerFilter::Opponent)`
 /// and fanned out at runtime (`game/effects/mod.rs`), which rebinds the acting
-/// controller per player (CR 101.4 APNAP order); the effect's own `target`
+/// controller per scoped player; the effect's own `target`
 /// stays `TargetFilter::Controller`. This parser emits only kind + count.
 ///
 /// `input` is the already-lowercased text AFTER the "get "/"gets " prefix.

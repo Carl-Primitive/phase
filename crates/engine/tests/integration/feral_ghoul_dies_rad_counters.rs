@@ -17,10 +17,10 @@
 //! supply the buffed power.
 //!
 //! CR 608.2c: the controller follows the instructions in the order written.
-//! CR 101.4 (APNAP) orders the per-player fan-out: "each opponent" is carried
-//! on the trigger's `execute` as `player_scope: Some(PlayerFilter::Opponent)`,
-//! and the runtime driver rebinds the acting controller to each scoped player
-//! while the effect's own `target` stays `TargetFilter::Controller`.
+//! The engine's `player_scope: Some(PlayerFilter::Opponent)` carries "each
+//! opponent" on the trigger's `execute`; the runtime driver fans out to each
+//! scoped player while the effect's own `target` stays
+//! `TargetFilter::Controller`.
 //!
 //! Revert baseline: before the parser fix, the dies trigger's body lowered to
 //! `Effect::Unimplemented { name: "get", description: "get a number of rad
@@ -110,8 +110,7 @@ fn feral_ghoul_rad_count_tracks_its_power_not_a_constant() {
     );
 }
 
-/// CR 101.4 + CR 608.2c: "each opponent" fans out to EVERY opponent in APNAP
-/// order, and the controller gets none.
+/// "Each opponent" fans out to EVERY opponent, and the controller gets none.
 ///
 /// This is the first exercise anywhere in the corpus of `player_scope` fan-out
 /// combined with a non-`Fixed`, `ObjectScope::Source`-scoped count: the two
@@ -154,12 +153,12 @@ fn feral_ghoul_dies_gives_every_opponent_rad_counters() {
     assert_eq!(
         runner.state().players[P1.0 as usize].player_counter(&PlayerCounterKind::Rad),
         3,
-        "CR 101.4: the first opponent gets 3 rad counters"
+        "the first opponent gets 3 rad counters"
     );
     assert_eq!(
         runner.state().players[P2.0 as usize].player_counter(&PlayerCounterKind::Rad),
         3,
-        "CR 101.4: EVERY opponent gets 3 rad counters — the fan-out must reach \
+        "EVERY opponent gets 3 rad counters — the fan-out must reach \
          the second opponent with the same source LKI value"
     );
     assert_eq!(
