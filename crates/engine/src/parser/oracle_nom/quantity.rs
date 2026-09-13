@@ -6177,20 +6177,19 @@ pub(crate) fn parse_attachment_type_list(input: &str) -> OracleResult<'_, Vec<Ty
 /// only names WHICH OBJECT the count is taken against; the two citations record
 /// where its callers' effects land, not where it acts.
 ///
-// CR 301.5 + CR 303.4 + CR 613.4c: Three referents share the "<type>
-// [and <type>]* attached to <referent>" shape. The static parser already
-// normalizes the source's printed name to `~`, so a literal `~` referent
-// means "attached to the static's source object" (Kellan, the
-// Fae-Blooded — `AttachedToSource`). The pronoun/noun phrase
-// `it` / `that creature` is anaphoric on the affected subject of the
-// surrounding effect — for
-// "Enchanted creature gets +N/+M for each Aura and Equipment attached to
-// it", "it" refers to the enchanted creature, the per-recipient host of
-// the layer-evaluated boost (`AttachedToRecipient`). Baki's Curse uses the
-// same recipient-relative grammar for damage: "each creature for each Aura
-// attached to that creature." These literals are single-token leaves of
-// the same combinator, so we dispatch with `alt` and select the matching
-// `FilterProp` from a typed pair.
+/// CR 301.5 + CR 303.4: Three referents share the `"<type> [and <type>]*
+/// attached to <referent>"` shape. The static parser already normalizes the
+/// source's printed name to `~`, so a literal `~` referent means "attached to
+/// the static's source object" (Kellan, the Fae-Blooded — `AttachedToSource`).
+/// The pronoun/noun phrase `it` / `that creature` is anaphoric on the affected
+/// subject of the surrounding effect — for "Enchanted creature gets +N/+M for
+/// each Aura and Equipment attached to it", "it" refers to the enchanted
+/// creature, the per-recipient host of the layer-evaluated boost
+/// (`AttachedToRecipient`). Baki's Curse uses the same recipient-relative
+/// grammar for damage: "each creature for each Aura attached to that
+/// creature." These literals are single-token leaves of the same combinator,
+/// so we dispatch with `alt` and select the matching `FilterProp` from a typed
+/// pair.
 pub(crate) fn parse_attachment_referent_prop(input: &str) -> OracleResult<'_, FilterProp> {
     alt((
         value(FilterProp::AttachedToSource, tag(" attached to ~")),

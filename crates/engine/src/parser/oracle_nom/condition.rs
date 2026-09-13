@@ -13386,6 +13386,167 @@ mod tests {
         }
     }
 
+    /// Destructure an attachment-threshold condition into
+    /// `(threshold, type_filters, properties)`, or panic with the actual shape.
+    /// Shared by the `parse_attached_to_referent_count_ge` tests below.
+    fn attachment_threshold_parts(
+        input: &str,
+    ) -> (i32, Vec<TypeFilter>, Vec<crate::types::ability::FilterProp>) {
+        let (rest, c) = parse_inner_condition(input)
+            .unwrap_or_else(|e| panic!("expected {input:?} to parse, got {e:?}"));
+        assert_eq!(rest, "", "combinator must consume all of {input:?}");
+        match c {
+            StaticCondition::QuantityComparison {
+                lhs:
+                    QuantityExpr::Ref {
+                        qty:
+                            QuantityRef::ObjectCount {
+                                filter: TargetFilter::Typed(tf),
+                            },
+                    },
+                comparator: Comparator::GE,
+                rhs: QuantityExpr::Fixed { value },
+            } => (value, tf.type_filters, tf.properties),
+            other => {
+                panic!("expected QuantityComparison(ObjectCount GE n) for {input:?}, got {other:?}")
+            }
+        }
+    }
+
+    /// CR 301.5 + CR 303.4 + CR 611.3a: the attachment-threshold condition is a
+    /// CLASS, not a card. These pin the three axes its doc comment claims —
+    /// threshold idiom, type list, and referent — so the class claim cannot
+    /// silently regress to the one printed surface form that motivated it.
+    ///
+    /// Brass Knuckles / Balan ("two or more Equipment are attached to it") are
+    /// covered end-to-end by `tests/integration/brass_knuckles_equipment_threshold.rs`;
+    /// these are the building-block-level counterparts.
+    #[test]
+    fn attachment_threshold_covers_both_ge_idioms() {
+        // "N or more" — the printed form.
+        let (n, types, props) =
+            attachment_threshold_parts("two or more equipment are attached to it");
+        assert_eq!(n, 2);
+        assert_eq!(types, vec![TypeFilter::Subtype("Equipment".into())]);
+        assert_eq!(props, vec![FilterProp::AttachedToRecipient]);
+
+        // "at least N" — the same condition via the other `parse_ge_threshold`
+        // arm; no second combinator arm exists for it, which is the point.
+        let (n, types, props) =
+            attachment_threshold_parts("at least three equipment are attached to it");
+        assert_eq!(n, 3);
+        assert_eq!(types, vec![TypeFilter::Subtype("Equipment".into())]);
+        assert_eq!(props, vec![FilterProp::AttachedToRecipient]);
+    }
+
+    /// Every referent the shared `parse_attachment_referent_prop` map knows is
+    /// reachable from the threshold form — the payoff of extracting that map
+    /// rather than duplicating it.
+    #[test]
+    fn attachment_threshold_covers_every_referent() {
+        for (input, expected) in [
+            (
+                "two or more equipment are attached to ~",
+                FilterProp::AttachedToSource,
+            ),
+            (
+                "two or more equipment are attached to him",
+                FilterProp::AttachedToSource,
+            ),
+            (
+                "two or more equipment are attached to that creature",
+                FilterProp::AttachedToRecipient,
+            ),
+            (
+                "two or more curses are attached to that player",
+                FilterProp::AttachedToPlayer {
+                    player: ControllerRef::EnchantedPlayer,
+                },
+            ),
+        ] {
+            let (_, _, props) = attachment_threshold_parts(input);
+            assert_eq!(props, vec![expected.clone()], "referent for {input:?}");
+        }
+    }
+
+    /// A multi-type list collapses to one `TypeFilter::AnyOf`, exactly as the
+    /// "for each Aura and Equipment attached to ~" noun-phrase form does —
+    /// both go through the shared `attachment_object_count` constructor, so
+    /// they cannot diverge.
+    #[test]
+    fn attachment_threshold_collapses_multi_type_list_to_any_of() {
+        let (n, types, props) =
+            attachment_threshold_parts("two or more auras and equipment are attached to ~");
+        assert_eq!(n, 2);
+        assert_eq!(
+            types,
+            vec![TypeFilter::AnyOf(vec![
+                TypeFilter::Subtype("Aura".into()),
+                TypeFilter::Subtype("Equipment".into()),
+            ])]
+        );
+        assert_eq!(props, vec![FilterProp::AttachedToSource]);
+    }
+
+    /// The copula is REQUIRED, and these are the two ways that matters.
+    ///
+    /// Each negative is paired with the positive it differs from by one token,
+    /// so neither can pass because the input failed to reach the combinator at
+    /// all: the bare noun phrase and the negated form are rejected while the
+    /// affirmative plural is accepted on otherwise identical text.
+    #[test]
+    fn attachment_threshold_requires_the_affirmative_plural_copula() {
+        // Positive control: the only difference from the two negatives below is
+        // the copula token itself.
+        let (n, _, props) = attachment_threshold_parts("two or more equipment are attached to it");
+        assert_eq!(n, 2);
+        assert_eq!(props, vec![FilterProp::AttachedToRecipient]);
+
+        // A bare NOUN PHRASE is not a condition. Admitting it would let
+        // "two or more Equipment attached to it" stand as a complete
+        // `StaticCondition`.
+        assert!(
+            parse_inner_condition("two or more equipment attached to it").is_err(),
+            "the copula is required: a bare noun phrase must not parse as a condition"
+        );
+
+        // CR 608.2c: the NEGATED form must fail closed rather than parse as the
+        // positive. `tag(" are")` leaves "n't attached to it", which no referent
+        // arm accepts.
+        assert!(
+            parse_inner_condition("two or more equipment aren't attached to it").is_err(),
+            "the negated form must fail closed, never parse as the affirmative"
+        );
+    }
+
+    /// Registering the attachment arm beside `parse_creatures_are_attacking_count_ge`
+    /// must not shadow it. Both share the `parse_ge_threshold` head, so a future
+    /// widening of either would surface here first.
+    #[test]
+    fn attachment_threshold_does_not_shadow_the_attacking_sibling() {
+        let (rest, c) = parse_inner_condition("three or more creatures are attacking").unwrap();
+        assert_eq!(rest, "");
+        match c {
+            StaticCondition::QuantityComparison {
+                lhs:
+                    QuantityExpr::Ref {
+                        qty:
+                            QuantityRef::ObjectCount {
+                                filter: TargetFilter::Typed(tf),
+                            },
+                    },
+                comparator: Comparator::GE,
+                rhs: QuantityExpr::Fixed { value: 3 },
+            } => assert!(
+                tf.properties
+                    .iter()
+                    .any(|p| matches!(p, FilterProp::Attacking { defender: None })),
+                "the attacking sibling must still win its own input, got {tf:?}"
+            ),
+            other => panic!("attacking sibling was shadowed, got {other:?}"),
+        }
+    }
+
     #[test]
     fn test_control_count_ge_artifacts() {
         let (rest, c) = parse_inner_condition("you control two or more artifacts").unwrap();
