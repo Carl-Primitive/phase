@@ -16,14 +16,14 @@ The orchestrator gives you:
 1. Mode: `implementation/fix` or `measurement-only`.
 2. The reviewed plan (every section: Pattern Coverage, Building Blocks, Logic Placement, Rust Idioms, Nom Compliance, Extension vs Creation, Analogous Trace, step-by-step file changes).
 3. `BASE_SHA`; for `implementation/fix`, named `START_SHA` and `IMPLEMENTATION_WORKTREE`; for `measurement-only`, immutable `CANDIDATE_SHA` and the named `IMPLEMENTATION_WORKTREE` too.
-4. Frozen in-/out-of-bounds scope paths as a duplicate-free `LC_ALL=C sort -z` NUL-delimited representation and its SHA256; for measurement-only, clean detached base/candidate projection worktrees.
+4. Frozen in-/out-of-bounds scope paths as a duplicate-free `LC_ALL=C sort -z` NUL-delimited representation and its SHA256; for measurement-only, nothing more — measurement runs in the checkout Tilt watches, at `CANDIDATE_SHA`.
 6. For an implementation/fix round, any reviewer findings as constraints.
 
 Mode is a hard boundary:
 
 
 - **`implementation/fix`:** First verify and report `IMPLEMENTATION_WORKTREE` as clean with `HEAD == START_SHA` and no staged entries. The initial executor has `START_SHA == BASE_SHA`; every fix executor has the prior reviewed `CANDIDATE_SHA` as `START_SHA`, never a moving head. After surgical edits, report only **PREPARATORY** checks and the required end-of-edit stable-HEAD check (`HEAD == START_SHA`, no executor staging, exact authorized unstaged delta). Do not create a candidate commit or a completion claim.
-- **`measurement-only`:** Make no source edits, formatting edits, or commits. Answer one question: does this change move parser output? First confirm the supplied base/candidate worktrees are detached, clean, and at their expected SHAs. Run `scripts/engine-source-hash.sh` in each. If the hashes match and nothing in `Cargo.toml`, `.cargo/config.toml`, `rust-toolchain.toml`, or `scripts/engine-source-hash.sh` changed between the two, there is no parse-affecting change and you are done. Otherwise build the tooling on each side, generate card data from each against the same pinned data root, run the comparator, and report what actually differs. If you cannot complete the measurement, say so plainly and do not claim parser evidence.
+- **`measurement-only`:** Make no source edits, formatting edits, or commits. Answer one question: does this change move parser output? First confirm `IMPLEMENTATION_WORKTREE` is clean at `CANDIDATE_SHA`. Run `./scripts/parse-diff-local.sh "$BASE_SHA"`: it hashes both sides with `scripts/engine-source-hash.sh`, and if the hashes match (and nothing in `Cargo.toml`, `.cargo/config.toml`, `rust-toolchain.toml`, or `scripts/engine-source-hash.sh` changed between the two) there is no parse-affecting change and you are done. Otherwise it downloads the published baseline for `BASE_SHA` and runs the comparator against the candidate's coverage data; report what actually differs. Never build the base side yourself. If you cannot complete the measurement (for example no baseline is published for that base), say so plainly and do not claim parser evidence.
 
 ### Phase mode (spawn-input overlay on `implementation/fix`)
 
@@ -122,15 +122,10 @@ After edits land, derive `RUST_PATHS` from the frozen authorized path list (only
 For Rust / engine / parser work:
 
 ```bash
-(cd "$IMPLEMENTATION_WORKTREE" &&
-  if tilt get uiresource clippy >/dev/null 2>&1; then
-    ./scripts/tilt-wait.sh --timeout 240 clippy test-engine card-data
-  else
-    cargo clippy --all-targets -- -D warnings
-    cargo test -p phase-engine
-    ./scripts/gen-card-data.sh
-  fi)
+(cd "$IMPLEMENTATION_WORKTREE" && ./scripts/verify-card.sh --no-gate-a --timeout 900 "<Card Name>" ...)
 ```
+
+`verify-card.sh` is the only Rust verification command: `cargo fmt --all`, then `tilt-wait.sh clippy test-engine card-data` against Tilt's warm engine loop, then per-card coverage (`supported:true gap_count:0`) and `cargo semantic-audit` (zero findings). Pass the card name(s) the task is about; pass none for a change with no target card. It exits **3** when Tilt is not running — that is not a failure: start the engine loop (`nohup tilt up --stream -- engine > /tmp/tilt-up.log 2>&1 &`, then wait until `tilt get uiresource clippy` exits 0) and rerun. Never fall back to `cargo clippy` / `cargo test` / `cargo build` directly, never add `--features`, `--profile`, `--release`, or `CARGO_TARGET_DIR` to any cargo command, and never run verification from a git worktree Tilt does not watch: each of those is a full extra build of the engine crate (one dev-profile compile is ~1 GB of rlib plus 1–2 GB of incremental state, and many minutes).
 
 For frontend work:
 
@@ -173,9 +168,7 @@ For parser changes always run additionally as preparatory checks:
 
 ### Measurement-only mode: parser evidence
 
-Run `scripts/engine-source-hash.sh "$BASE_SHA"` in the detached base worktree and `scripts/engine-source-hash.sh "$CANDIDATE_SHA"` in the detached candidate worktree, then `git -C "$IMPLEMENTATION_WORKTREE" diff --name-only -z "$BASE_SHA" "$CANDIDATE_SHA" -- Cargo.toml .cargo/config.toml rust-toolchain.toml scripts/engine-source-hash.sh`. Equal hashes with an empty authority diff mean no parse-affecting change: report that and run no parser tool. Otherwise project both sides.
-
-When projecting, pin the read-only `AtomicCards.json` once and use it for both sides. For each side, work in that side's detached worktree with its own `CARGO_TARGET_DIR` and run `CARGO_INCREMENTAL=0 cargo build --profile tool --features cli --bin oracle-gen --bin coverage-report --bin coverage-parse-diff` (these targets are build-once; incremental state is pure disk cost — measured 17 of 28 GB on one such directory). Run that side's `oracle-gen` and `coverage-report` in that worktree, then invoke the base-built comparator with both `--base-sha "$BASE_SHA"` and `--head-sha "$CANDIDATE_SHA"`. Report what the comparator found.
+With `CANDIDATE_SHA` checked out clean in the checkout Tilt watches and `tilt-wait.sh card-data` green for it, run `./scripts/parse-diff-local.sh "$BASE_SHA"`. It hashes both sides with `scripts/engine-source-hash.sh`; equal hashes mean no parse-affecting change — report that and run no parser tool. Otherwise it downloads the published baseline `coverage-data-<base-hash>.json` (the artifact main-push CI publishes and PR CI diffs against) and runs `coverage-parse-diff` against the candidate's `client/public/coverage-data.json`, which Tilt's `card-data` resource already wrote. Report what the comparator found (`target/parse-diff/parse-diff.md`). If no baseline is published for that base, say so and defer to the parse-diff comment CI posts on the PR. Do not build either side yourself: a base-side build is a full cold compile of the engine crate into a second target directory, to reproduce a file CI already publishes.
 
 
 ### Discriminating-test gate

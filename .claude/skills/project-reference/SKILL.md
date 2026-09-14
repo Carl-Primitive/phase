@@ -9,14 +9,14 @@ Lookup material for build commands, the verification cadence, architecture, envi
 
 ## Tilt resources & operational rules
 
-**Tilt is always running and continuously rebuilds on file changes.** Do NOT run `cargo build`, `cargo clippy`, `cargo test -p phase-engine`, `pnpm run type-check`, or `pnpm lint` directly — they compete for cargo target locks. Check Tilt logs instead.
+**Tilt is always running and continuously rebuilds on file changes.** Do NOT run `cargo build`, `cargo clippy`, `cargo test -p phase-engine`, `pnpm run type-check`, or `pnpm lint` directly — they compete for cargo target locks, and any profile/feature/target-dir difference from Tilt's commands is a full extra build of the engine crate. Check Tilt logs instead. Two loops: `tilt up` (client dev loop: wasm + frontend + lobby worker, with `-- server test lint` opt-ins) and `tilt up -- engine` (engine-only: `card-data` + `clippy` + `test-engine`, client resources removed — the loop for card and rules-engine work).
 
 **Available Tilt resources** (defined in `Tiltfile`):
 | Resource | What it does | Triggers on |
 |----------|-------------|-------------|
 | `clippy` | `cargo clippy --all-targets -- -D warnings` | `crates/` changes |
-| `test-engine` | `cargo test -p phase-engine` | `crates/engine/src/` changes |
-| `test-ai` | `cargo test -p phase-ai` | `crates/engine/src/` or `crates/phase-ai/src/` changes |
+| `test-engine` | `cargo nextest run -p phase-engine [-p phase-ai] -E 'package(phase-engine)'` (same package selection as `build-native`, so nothing recompiles) | `crates/engine/src/` changes |
+| `test-ai` | `cargo nextest run -p phase-engine -p phase-ai -E 'package(phase-ai)'` | `crates/engine/src/` or `crates/phase-ai/src/` changes |
 | `wasm` | WASM build (depends on clippy) | engine/AI/WASM src changes |
 | `card-data` | `./scripts/gen-card-data.sh` | `crates/engine/src/` changes |
 | `check-frontend` | `pnpm run type-check && pnpm lint` | `client/src/` changes |
@@ -53,12 +53,12 @@ Exit codes: `0` all ok, `1` a resource is in terminal error (`updateStatus=error
 - Use `--follow` only when you need to stream live output (e.g., waiting for a build in progress).
 - Use `--since` to limit output — don't dump entire build history.
 - If a resource shows errors, fix your code and Tilt will automatically rebuild.
-- Only run cargo/pnpm commands directly if Tilt is confirmed not running. Detect with `tilt get uiresource clippy >/dev/null 2>&1` (exit 0 = Tilt up; exit non-zero = Tilt down or unreachable). `tilt status` is **not** a valid subcommand — do not use it.
+- If Tilt is not running, start it (`tilt up -- engine` for engine/card work, `tilt up` for the client loop) instead of running cargo/pnpm directly. Detect with `tilt get uiresource clippy >/dev/null 2>&1` (exit 0 = Tilt up; exit non-zero = Tilt down or unreachable). `tilt status` is **not** a valid subcommand — do not use it.
 - `cargo fmt --all` is the one exception — always run it directly since Tilt doesn't auto-format.
 
 ## Verification cadence (risk-scaled)
 
-`cargo fmt --all` is always run directly — Tilt does not auto-format. For everything else, prefer Tilt logs (`tilt logs <resource>`) / `./scripts/tilt-wait.sh` when Tilt is up, and fall back to direct cargo/pnpm only when Tilt is confirmed down (`tilt get uiresource clippy >/dev/null 2>&1`; exit 0 = up).
+`cargo fmt --all` is always run directly — Tilt does not auto-format. Everything else goes through Tilt: `tilt logs <resource>` / `./scripts/tilt-wait.sh`. If Tilt is down (`tilt get uiresource clippy >/dev/null 2>&1` fails), start it — `tilt up -- engine` for engine/card work, `tilt up` for the client loop — and wait. There is no direct-cargo fallback: a direct `cargo clippy`/`test`/`build` lands in a different target root, profile, or feature set than Tilt's, which is a full extra compile of the engine crate that Tilt cannot reuse.
 
 ```bash
 # Always run fmt directly — Tilt does not auto-format.
@@ -68,41 +68,29 @@ cargo fmt --all
 # bug reports. Broader Tilt resources may keep running in the background; do not
 # wait on card-data for every tiny parser edit.
 ./scripts/check-parser-combinators.sh
-if tilt get uiresource clippy >/dev/null 2>&1; then
-  ./scripts/tilt-wait.sh --timeout 180 clippy
-else
-  cargo clippy --all-targets -- -D warnings
-fi
+./scripts/tilt-wait.sh --timeout 180 clippy
 
 # Full Rust verification: before marking an issue fixed-unreleased, after
 # non-trivial engine/runtime changes, before long handoffs, and before PR or
 # release boundaries. Parser changes invalidate card-data, but card-data is a
 # checkpoint resource, not a per-micro-edit throttle.
-if tilt get uiresource clippy >/dev/null 2>&1; then
-  ./scripts/tilt-wait.sh --timeout 240 clippy test-engine card-data
-else
-  cargo clippy --all-targets -- -D warnings
-  cargo test -p phase-engine
-  ./scripts/gen-card-data.sh
-fi
+./scripts/tilt-wait.sh --timeout 900 clippy test-engine card-data
 
-# Frontend verification:
-if tilt get uiresource clippy >/dev/null 2>&1; then
-  ./scripts/tilt-wait.sh --timeout 180 check-frontend
-else
-  (cd client && pnpm run type-check && pnpm lint)
-fi
+# Card contribution — the single entrypoint (fmt → the three resources above →
+# per-card coverage → semantic-audit → Gate A). Exit 3 = Tilt not running; start it.
+./scripts/verify-card.sh "<Card Name>"
+
+# Frontend verification (client loop only):
+./scripts/tilt-wait.sh --timeout 180 check-frontend
 ```
 
-After `tilt-wait.sh` returns non-zero, fetch details with `tilt logs <resource> --tail 50 --since 2m`. After direct cargo/pnpm failures, the output is already on stdout.
+After `tilt-wait.sh` returns non-zero, fetch details with `tilt logs <resource> --tail 50 --since 2m`. Exit `3` is "cannot answer" (Tilt down, or watching another checkout) — start Tilt or move to the watched checkout; it is never a build failure.
 
-These blocks are designed for interactive use, where a non-zero exit from `tilt-wait.sh` or a cargo command is surfaced via the printed status line and the operator fixes it before re-verifying. **In a `set -e` shell or scripted/CI harness, the `if` construct will swallow the inner non-zero exit** — wrap each branch with `|| exit $?` (or restructure as `tilt get uiresource clippy >/dev/null 2>&1 && tilt-wait.sh ... || cargo ...`) when copy-pasting into automation.
-
-The one-shot audit binaries (`cargo coverage`, `cargo semantic-audit`, `cargo parser-gaps`, `cargo rules-audit`) are not continuous Tilt resources — invoke them directly in both modes.
+The one-shot audit binaries (`cargo coverage`, `cargo semantic-audit`, `cargo parser-gaps`, `cargo rules-audit`) are not continuous Tilt resources — invoke them through those exact aliases. The aliases pin `--profile tool --features cli`, the same build `gen-card-data.sh` (Tilt's `card-data`) already produced, so they link instead of rebuilding; adding or dropping a feature or profile on one of them is a second full engine build. `./scripts/parse-diff-local.sh` diffs the published parse baseline for your base commit against the local coverage data (what CI posts on a PR) without building anything. `./scripts/target-gc.sh [--days N] [--dry-run]` reclaims orphaned artifacts under every target root by age (cargo never deletes an artifact whose hash went stale); it refuses to run while Tilt or cargo is alive — never `cargo clean` a Tilt checkout, that discards the warm engine builds.
 
 ## Build & Development Commands
 
-Run `./scripts/setup.sh` for full onboarding (Scryfall sidecars → card data → WASM → pnpm install). Auto-detects Tilt and defers WASM + card-data to `tilt up` when present. Flags: `--agent` skips Scryfall art for LLM contributors (see `docs/AI-CONTRIBUTOR.md`); `--no-tilt` forces the inline build path.
+Run `./scripts/setup.sh` for full onboarding (Scryfall sidecars → card data → WASM → pnpm install). Auto-detects Tilt and defers WASM + card-data to `tilt up` when present. Flags: `--engine` is the card/engine-contributor mode (MTGJSON + card data + Comprehensive Rules + hooks; no Scryfall, no pnpm, no WASM — pair with `tilt up -- engine`); `--agent` is `--engine` plus inline card-data generation (see `docs/AI-CONTRIBUTOR.md`); `--no-tilt` forces the inline build path.
 
 ### Rust Engine
 ```bash

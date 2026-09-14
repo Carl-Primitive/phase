@@ -158,15 +158,9 @@ Run when wrapping up or at a natural stopping point (queue empty, pattern family
 ```bash
 cargo fmt --all
 
-# Prefer Tilt when it's running; fall back to direct cargo when it isn't.
-# (See CLAUDE.md § "Canonical verification pattern" for the template.)
-if tilt get uiresource clippy >/dev/null 2>&1; then
-  ./scripts/tilt-wait.sh --timeout 240 clippy test-engine card-data
-else
-  cargo clippy -p phase-engine --all-targets -- -D warnings  # engine only — parser changes don't touch downstream crates
-  cargo test -p phase-engine                                  # engine suite — parser + game + types
-  ./scripts/gen-card-data.sh                            # regen card-data.json (Tilt's `card-data` resource handles this when up)
-fi
+# Through Tilt (see CLAUDE.md § "Canonical verification pattern"). Tilt down?
+# start `tilt up -- engine` and wait — a direct cargo run is a second full engine build.
+./scripts/tilt-wait.sh --timeout 900 clippy test-engine card-data
 
 # One-shot audit binaries (not Tilt resources — direct invocation in both modes):
 cargo coverage                                        # final flip count (reads fresh card-data.json)

@@ -8,51 +8,68 @@ echo "Running pre-push checks..."
 # inheriting hook input.
 exec </dev/null
 
-# Rust
+# This hook reuses the artifacts the Tilt engine loop already keeps warm. It
+# must NOT introduce a profile, feature set, or target root that Tilt does not
+# use: each such combination is a full extra engine compile (~1 GB rlib plus
+# ~1 GB incremental state), and the previous version of this hook carried four
+# of them (clippy with engine/proptest, `cargo check --release` under the LTO
+# wasm-size profile, proptest tests, and a tool-profile oracle-gen rerun). CI
+# still runs all of those on the PR.
+
 echo "  [rust] cargo fmt --check"
 cargo fmt --all -- --check
-
-echo "  [rust] cargo clippy"
-cargo clippy --workspace --all-targets --features engine/proptest -- -D warnings
-
-echo "  [rust] card-data-validate release check"
-cargo check --release --bin card-data-validate
 
 echo "  [rust] parser combinator gate"
 ./scripts/check-parser-combinators.sh
 
-echo "  [rust] engine parser tests"
-PROPTEST_CASES="${PROPTEST_CASES:-4}" cargo test -p phase-engine --features proptest parser::oracle::tests
+if tilt get uiresource clippy >/dev/null 2>&1; then
+  echo "  [rust] tilt-wait clippy test-engine card-data (Tilt's artifacts, no extra build)"
+  ./scripts/tilt-wait.sh --timeout 900 clippy test-engine card-data
+else
+  echo "  [rust] Tilt is not running: same commands, same profiles, same target roots as Tilt"
+  CARGO_TARGET_DIR=target/clippy cargo clippy --all-targets -- -D warnings
+  cargo test -p phase-engine
+  ./scripts/gen-card-data.sh
+fi
 
-echo "  [rust] phase-ai lib tests"
-cargo test -p phase-ai --lib
-
-tmpdir=$(mktemp -d)
-trap 'rm -rf "$tmpdir"' EXIT
-
-echo "  [cards] oracle-gen"
-cargo run --profile tool --bin oracle-gen --features cli -- data/ --stats --names-out "$tmpdir/card-names.json" > "$tmpdir/card-data.json"
-
-echo "  [cards] card-data-validate"
-cargo run --profile tool --bin card-data-validate -- "$tmpdir/card-data.json"
-
-echo "  [cards] coverage-report"
-mkdir -p "$tmpdir/data"
-cp "$tmpdir/card-data.json" "$tmpdir/data/card-data.json"
-cp "$tmpdir/card-names.json" "$tmpdir/data/card-names.json"
-cargo run --profile tool --bin coverage-report -- "$tmpdir/data" --all > "$tmpdir/coverage-data.json"
+if tilt get uiresource test-ai >/dev/null 2>&1; then
+  echo "  [rust] phase-ai lib tests (same profile as Tilt's test-ai; no rebuild)"
+  cargo test -p phase-ai --lib
+else
+  echo "  [rust] phase-ai lib tests skipped (no test-ai resource in this Tilt session; CI runs them)"
+fi
 
 echo "  [cards] coverage regression check"
 ./scripts/coverage-regression-check.sh \
   "https://data.phase-rs.dev/preview/coverage-data.json" \
-  "$tmpdir/coverage-data.json" \
+  client/public/coverage-data.json \
   --fail-on-engine
 
-# Frontend
-echo "  [client] pnpm lint"
-(cd client && pnpm lint)
+# Opt-in: the checks the previous hook always ran and CI still runs on every
+# PR. Each is a separate feature set or profile, i.e. a full extra engine
+# build, so they are off unless you ask.
+if [ "${PHASE_PREPUSH_FULL:-0}" = 1 ]; then
+  echo "  [rust] clippy with engine/proptest (PHASE_PREPUSH_FULL)"
+  cargo clippy --workspace --all-targets --features engine/proptest -- -D warnings
+  echo "  [rust] card-data-validate release check (PHASE_PREPUSH_FULL)"
+  cargo check --release --bin card-data-validate
+  echo "  [rust] engine parser proptests (PHASE_PREPUSH_FULL)"
+  PROPTEST_CASES="${PROPTEST_CASES:-4}" cargo test -p phase-engine --features proptest parser::oracle::tests
+fi
 
-echo "  [client] pnpm type-check"
-(cd client && pnpm run type-check)
+# Frontend checks only when the push can affect the client: client/ itself, or
+# the wasm crates whose generated .d.ts the TypeScript build imports.
+base_ref=""
+for r in upstream/main origin/main; do
+  if git rev-parse -q --verify "$r" >/dev/null 2>&1; then base_ref="$r"; break; fi
+done
+if [ -n "$base_ref" ] && ! git diff --quiet "$(git merge-base HEAD "$base_ref")" HEAD -- client crates/engine-wasm crates/draft-wasm; then
+  echo "  [client] pnpm lint"
+  (cd client && pnpm lint)
+  echo "  [client] pnpm type-check"
+  (cd client && pnpm run type-check)
+else
+  echo "  [client] skipped (no client/ or wasm-crate changes vs ${base_ref:-main})"
+fi
 
 echo "All pre-push checks passed."

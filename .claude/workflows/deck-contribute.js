@@ -431,18 +431,20 @@ function clusterVerifyPrompt(mechanic, cards) {
     `Run Developer-track verification for the "${mechanic}" mechanic in this exact ` +
     `order, fixing in-loop on failure (max ${MAX_VERIFY_RETRIES} retries per ` +
     `command):\n` +
-    `1. cargo fmt --all\n` +
-    `2. ./scripts/check-parser-combinators.sh (Gate A)\n` +
-    `3. If \`tilt get uiresource clippy >/dev/null 2>&1\` succeeds: ` +
-    `./scripts/tilt-wait.sh --timeout 240 clippy test-engine card-data ; else ` +
-    `cargo clippy-strict && cargo test -p phase-engine && ./scripts/gen-card-data.sh\n` +
-    `4. cargo coverage — confirm EACH of these cards is now supported:true gap:0; ` +
-    `list the ones that are in cardsSupported:\n${cards.map((c) => `- ${c}`).join('\n')}\n` +
-    `5. cargo semantic-audit — confirm none of these cards has findings -> ` +
-    `semanticAuditClean.\n` +
-    `passed=true only if every command is clean AND every listed card is in ` +
-    `cardsSupported AND semanticAuditClean. Record each command status; list ` +
-    `unresolved failures.`
+    `1. ./scripts/verify-card.sh ${cards.map((c) => JSON.stringify(c)).join(' ')}\n` +
+    `   (single entrypoint: cargo fmt; tilt-wait clippy/test-engine/card-data; ` +
+    `per-card coverage supported:true gap_count:0; cargo semantic-audit 0 findings ` +
+    `per card; Gate A). Exit 3 = Tilt not running: start the engine loop ` +
+    `(nohup tilt up --stream -- engine > /tmp/tilt-up.log 2>&1 &), wait for ` +
+    `\`tilt get uiresource clippy\` to exit 0, rerun. Never run cargo clippy/test/` +
+    `coverage directly, never add --features/--profile/--release/CARGO_TARGET_DIR, ` +
+    `never verify from a second worktree.\n` +
+    `2. From the script's per-card "ok"/"FAIL" lines, list the cards that are ` +
+    `supported:true gap_count:0 in cardsSupported:\n${cards.map((c) => `- ${c}`).join('\n')}\n` +
+    `3. semanticAuditClean = every listed card has 0 semantic-audit findings.\n` +
+    `passed=true only if the last line is \`verify-card PASS head=<sha> tree=clean\` ` +
+    `AND every listed card is in cardsSupported AND semanticAuditClean. Record ` +
+    `that line verbatim; list unresolved failures.`
   )
 }
 
@@ -465,7 +467,8 @@ function clusterPrPrompt(mechanic, cards, { impl, verify, partial }) {
   return (
     `Commit the working-tree change for the "${mechanic}" mechanic, push the ` +
     `branch to your fork, and open a PR to phase-rs/phase with base main.\nRun:\n` +
-    `git add -A && git commit -m ${JSON.stringify(title)} && git push -u origin HEAD\n` +
+    `git add -A -- . ':(exclude)crates/engine/data/known-tokens.toml' ':(exclude)crates/engine/data/oracle-subtypes.json' ':(exclude)crates/engine/data/mtgjson-vintage' && git commit -m ${JSON.stringify(title)} && git push -u origin HEAD\n` +
+    `(the three excluded files are MTGJSON catalogs gen-card-data regenerates locally; a maintainer refreshes them in chore PRs, never a card PR)\n` +
     `Then: gh pr create --base main --title ${JSON.stringify(title)} --body <BODY> ` +
     `(do NOT pass --label; the upstream auto-labeler handles it).\n\n` +
     `Use exactly this PR body:\n\n${body}\n\nReturn opened=true and the prUrl.`

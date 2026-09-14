@@ -8,6 +8,23 @@ If you are the LLM executing this: read top to bottom and follow every step. Do 
 
 ---
 
+## Quickstart — the whole Developer-track loop
+
+Everything a card contribution needs, in order. Each step is expanded in the numbered sections below, which are the authority if anything here disagrees with them.
+
+```bash
+gh repo fork phase-rs/phase --clone --remote && cd phase   # §2
+./scripts/setup.sh --engine          # §2.5: MTGJSON + card data + Comprehensive Rules + git hooks. No pnpm, no WASM.
+tilt up -- engine                    # §2.5: the engine loop — card-data + clippy + test-engine. Leave it running.
+# §3 pick a card · §4 branch from upstream/main and implement with $engine-implementer · §5 review
+./scripts/verify-card.sh "<Card Name>"   # §6: fmt → Tilt gates → coverage → semantic-audit → Gate A
+# §7 open the PR; paste the script's `verify-card PASS head=<sha> tree=clean` line under ## Verification
+```
+
+**Build budget.** The engine crate is ~1.7M lines in one crate; one compile of it is ~1 GB of rlib plus 1–2 GB of incremental state, per profile. The engine loop keeps exactly three warm (test, tool, and clippy roots under `target/`). Every `cargo` invocation that uses a `--features`, `--profile`, `--release`, or `CARGO_TARGET_DIR` the loop does not use is one more full engine build, and every second git worktree is a full cold build that Tilt cannot see. `verify-card.sh` runs nothing the loop has not already built; use it and nothing else. Cargo never deletes artifacts whose hash went stale (every dependency or toolchain bump orphans the previous engine build), so run `./scripts/target-gc.sh` with Tilt stopped every week or two; it sweeps by age and refuses to run under a live build.
+
+---
+
 ## 0. Quality Floor — self-confirm before touching code
 
 Before Step 1, confirm the following. **Tool support** and **Autonomy** are hard requirements: without them, abort. **Model** is load-bearing — see §0.1 for tier routing; report your actual model accurately on a `Model:` line in the PR body. **Thinking level** is advisory.
@@ -102,7 +119,7 @@ Throughout this document, skills are written with a leading `$` (Codex conventio
 
 | Track | You (the human) have... | The LLM will... |
 |-------|-------------------------|-----------------|
-| **Developer** | Rust toolchain + pnpm installed | Run full local verification (`cargo fmt`, `clippy`, `test`, `gen-card-data`, `coverage`, `semantic-audit`) before opening the PR. |
+| **Developer** | Rust toolchain + [Tilt](https://tilt.dev) installed (pnpm is **not** needed) | Run `./scripts/verify-card.sh "<Card Name>"` — fmt, clippy, tests, card data, coverage, semantic audit, Gate A — before opening the PR. |
 | **Non-developer** | Nothing — just an LLM session | Skip local verification entirely; GitHub Actions will run CI on the PR. The maintainer finishes any remaining polish. |
 
 Both tracks share steps 2–7. Only Step 5 (Verify) differs.
@@ -139,27 +156,35 @@ If `git merge --ff-only` fails, your fork's `main` has diverged from upstream �
 
 ## 2.5. Bootstrap the repo (Developer track only)
 
-Run **once per fresh clone** before invoking `$engine-implementer`. This downloads MTGJSON, generates `client/public/card-data.json`, fetches the local copy of the Comprehensive Rules, installs frontend deps, and configures git hooks:
+Run **once per fresh clone** before invoking `$engine-implementer`. This downloads MTGJSON, generates `client/public/card-data.json` and its sidecars, fetches the local copy of the Comprehensive Rules, and configures git hooks — and nothing else:
 
 ```bash
-./scripts/setup.sh --agent
+./scripts/setup.sh --engine
+tilt up -- engine      # then leave it running; background it if your harness needs the shell back:
+                       #   nohup tilt up --stream -- engine > /tmp/tilt-up.log 2>&1 &
 ```
 
-The `--agent` flag skips the three Scryfall image sidecars (`scryfall-data.json`, `scryfall-token-images.json`, `scryfall-printings.json`). They are runtime-only image data for the React frontend in a browser — no Rust integration test, parser tool, `cargo coverage`, `cargo semantic-audit`, or vitest test depends on them. Skipping saves a ~500 MB Scryfall bulk download with zero impact on the signal §6 verification consumes.
+`--engine` is the card-contributor mode: no Scryfall image sidecars (~500 MB of frontend-only image data), no `pnpm install`, no WASM build. None of those feed §6 verification. `--agent` implies `--engine` and additionally generates the card data inline so the files exist the moment the script exits (use it when nothing will be waiting on Tilt). If your change touches `client/`, run plain `./scripts/setup.sh` instead — that is the only case that needs pnpm.
 
-**Required for §6 verification:**
+`tilt up -- engine` is the **engine loop**: it builds, then keeps warm, exactly the three resources §6 is gated on — `card-data`, `clippy`, `test-engine` — and removes every client-side resource from the session. The first start is a cold build of the engine crate and takes a while; every later rebuild is incremental. Do not use plain `tilt up` (the client loop: wasm + frontend + lobby worker) or add `tauri`/`https` for card work; each adds full engine builds a card contribution never uses.
+
+**Required for §6 verification (all produced by the two commands above):**
 - `client/public/card-data.json` — without this, integration tests in `crates/engine/tests/integration/*.rs` self-skip with `"skipping: client/public/card-data.json not generated"` and `cargo coverage` / `cargo semantic-audit` / `cargo parser-gaps` cannot read parsed AST shape for any card. Agents without this file have no signal beyond unit tests.
 - `client/public/card-names.json`, `coverage-data.json`, `coverage-summary.json`, `card-data-meta.json`, `set-list.json`, `decks.json` — sidecars consumed by `cargo coverage` and the parser audit binaries.
 - `docs/MagicCompRules.txt` — gitignored. Required for the CR-annotation rule (`grep -n "^701.21" docs/MagicCompRules.txt`); without it you cannot verify CR numbers and §0.1 honesty applies.
 - `.git/config` git-hooks include — applies the repo's pre-commit hooks (including the `check-parser-combinators.sh` gate).
 
+**Expect three tracked files to show as modified afterwards:** `crates/engine/data/known-tokens.toml`, `oracle-subtypes.json` and `mtgjson-vintage`. gen-card-data regenerates those MTGJSON catalogs whenever the download is newer than the committed vintage; that is correct for your local build and a maintainer refreshes them upstream in dedicated chore PRs. Never include them in a card PR — commit by pathspec (`git add -- <your files>`), and `verify-card.sh` reports them separately from a dirty tree.
+
 **Also produced, but not consumed by Developer-track §6:**
 - `client/src/wasm/*` — WASM artifacts. Required by `pnpm run type-check` / vitest because TypeScript files import their generated `.d.ts`, but §6 doesn't run either. Safe to ignore unless your card touches frontend code.
 - `client/node_modules/` — required by `pnpm` commands. Same caveat.
 
-Agent mode also implies `--no-tilt` internally: even if `tilt` is on your PATH, setup.sh runs `gen-card-data.sh` and `build-wasm.sh` inline rather than deferring them to `tilt up`, so the required artifacts above are guaranteed present when the script exits.
+Agent mode also implies `--no-tilt` internally: even if `tilt` is on your PATH, setup.sh runs `gen-card-data.sh` inline rather than deferring it to Tilt, so the required artifacts above are guaranteed present when the script exits. Start `tilt up -- engine` afterwards anyway — §6 needs it.
 
-Skip this section entirely on the Non-developer track — CI runs everything `--agent` mode produces.
+**Never verify in a second git worktree.** Tilt watches one checkout; `./scripts/tilt-wait.sh` answers exit `3` ("cannot answer") from any other, and a fresh worktree means a fresh cold build of the engine crate. The clean-tree evidence §5–§7 want is a `verify-card PASS head=<sha> tree=clean` line from the watched checkout at the committed head, not a second checkout.
+
+Skip this section entirely on the Non-developer track — CI runs everything `--engine` mode produces.
 
 ---
 
@@ -277,25 +302,23 @@ Apply **all three** checks:
 
 **Developer track** — the implementation workflow must run the mechanical checks below before its final commit. On any failure, fix in-loop (max 2 retries) before committing. If still failing after retries, record the failure in the PR body under "CI Failures" and continue to Step 7 — do not abort. After §5's clean read-only review, run only the Gate A command shown after the mechanical checks; if it finds a problem, change and commit the fix, rerun §5, and then rerun Gate A.
 
-Step 2.5 (`./scripts/setup.sh --agent`) is a prerequisite for this section — `cargo coverage` and `cargo semantic-audit` both read `client/public/card-data.json`, and the integration suite self-skips without it.
+Step 2.5 (`./scripts/setup.sh --engine` and `tilt up -- engine`) is a prerequisite for this section — the semantic audit reads `client/public/card-data.json`, the integration suite self-skips without it, and the script below measures through Tilt.
 
-If Tilt is running locally (`tilt get uiresource clippy >/dev/null 2>&1` succeeds), prefer `tilt-wait.sh` for clippy/tests/card-data — it reuses Tilt's already-warm rebuild loop instead of fighting it for the cargo target lock. See CLAUDE.md § "Canonical verification pattern".
+The whole Developer-track verification is one command:
 
 ```bash
-cargo fmt --all                               # always direct — Tilt doesn't auto-format
-
-if tilt get uiresource clippy >/dev/null 2>&1; then
-  ./scripts/tilt-wait.sh --timeout 240 clippy test-engine card-data
-else
-  cargo clippy-strict
-  cargo test -p phase-engine
-  ./scripts/gen-card-data.sh
-fi
-
-# One-shot audit binaries (always direct — not Tilt resources):
-cargo coverage                                # every track: card is supported: true, gap_count: 0 — and no other card regressed
-cargo semantic-audit                          # every track: zero new findings for the card (a §3.1 fix also removes it from parser-misparse-backlog.md)
+./scripts/verify-card.sh "<Card Name>"        # add more names for a multi-card change
 ```
+
+It runs, in order, and stops nothing early so you see every failure at once:
+
+1. `cargo fmt --all` — the one cargo command Tilt cannot run for you.
+2. `./scripts/tilt-wait.sh clippy test-engine card-data` — waits on the engine loop's warm builds; `tilt-wait.sh` refuses to report on a build older than your last edit, so a green here describes the tree you are shipping.
+3. Coverage: the card must be `supported: true, gap_count: 0` in the `coverage-data.json` Tilt's `card-data` resource just wrote (and no other card regressed — CI checks that against the published baseline).
+4. `cargo semantic-audit` — zero findings for the card (a §3.1 fix also removes it from `parser-misparse-backlog.md`). This is the same tool-profile binary `card-data` already built, so it links, it does not rebuild.
+5. Gate A (`./scripts/check-parser-combinators.sh`).
+
+The last line is `verify-card PASS head=<sha> tree=clean|dirty` or `verify-card FAIL ...`. Exit `3` means Tilt is not running — start `tilt up -- engine` and rerun; it is not a failure and there is no direct-cargo path. Do not run `cargo clippy`, `cargo test`, `cargo coverage`, or `gen-card-data.sh` yourself, and never add `--features`, `--profile`, `--release`, or `CARGO_TARGET_DIR` to a cargo command: each is a second full engine build. `./scripts/verify-card.sh --parse-diff ...` additionally prints the field-level parse changes versus the published baseline for your base commit (the same diff CI posts on the PR).
 
 After the final commit and §5 review, run Gate A against that exact head:
 
@@ -369,7 +392,8 @@ Thinking: <high | max>
 - [ ] Final review-impl below is clean for the current committed head.
 - [ ] Both anchors cite existing analogous code at the same seam.
 
-- `<exact command or CI check>` — <exact result>
+- `./scripts/verify-card.sh "<Card Name>"` — `verify-card PASS head=<40-hex-sha> tree=clean` (Developer track; the SHA must equal the PR head)
+- `<any other command or CI check>` — <exact result>
 
 <commands and exact results; every fixed required box must appear exactly once and be checked>
 

@@ -156,16 +156,11 @@ Always format:
 cargo fmt --all
 ```
 
-Rust/engine/parser verification:
+Rust/engine/parser verification (through Tilt; start `tilt up -- engine` if it is down — no direct-cargo fallback):
 
 ```bash
-if tilt get uiresource clippy >/dev/null 2>&1; then
-  ./scripts/tilt-wait.sh --timeout 240 clippy test-engine card-data
-else
-  cargo clippy --all-targets -- -D warnings
-  cargo test -p phase-engine
-  ./scripts/gen-card-data.sh
-fi
+# Tilt down? start it (`tilt up -- engine`) and wait — a direct cargo run is a second full engine build.
+./scripts/tilt-wait.sh --timeout 900 clippy test-engine card-data
 ```
 
 Frontend verification:

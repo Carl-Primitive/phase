@@ -341,10 +341,7 @@ Deliverables
 4. CR annotations grep-verified.
 5. Verification gate (Tilt-preferred; see CLAUDE.md § "Canonical verification pattern"):
    - `cargo fmt --all` (always direct)
-   - If Tilt is up (`tilt get uiresource clippy >/dev/null 2>&1`): `./scripts/tilt-wait.sh --timeout 240 clippy test-engine card-data`
-   - Else: `cargo clippy --all-targets -- -D warnings` + `cargo test -p phase-engine` + `./scripts/gen-card-data.sh`
-   - `cargo coverage` (one-shot binary — always direct)
-   - `cargo semantic-audit` (one-shot — always direct; check no new findings for the target cards).
+   - `./scripts/verify-card.sh "<card 1>" "<card 2>" ...` for the tier's target cards — tilt-wait on `clippy test-engine card-data` (Tilt down? start `tilt up -- engine`; no direct-cargo fallback), per-card coverage (`supported:true gap_count:0`), `cargo semantic-audit` (no findings for the target cards), Gate A.
 6. Commit message: `feat(engine): <SET> Tier <N>.<M> — <one-line primitive>\n\n<body>`.
    Do not amend prior commits.
 

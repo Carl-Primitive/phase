@@ -10,7 +10,14 @@ set -euo pipefail
 #       the app in a browser, including the five Scryfall sidecars —
 #       image/printing data and the set-icon catalog — consumed at runtime by
 #       the React frontend.
-#     * Agent mode (--agent, env PHASE_SETUP_AGENT=1): skips the Scryfall
+#     * Engine mode (--engine, env PHASE_SETUP_ENGINE=1): the card / rules-
+#       engine contributor bootstrap. MTGJSON + card data + Comprehensive
+#       Rules + git hooks, and nothing else: no Scryfall sidecars, no
+#       `pnpm install` / `npm install`, no WASM build. pnpm is not required.
+#       This is everything docs/AI-CONTRIBUTOR.md §6 verification consumes.
+#     * Agent mode (--agent, env PHASE_SETUP_AGENT=1): engine mode, plus the
+#       card data is generated inline (not deferred to Tilt) so the files
+#       exist when the script exits. Historically this only skipped the Scryfall
 #       sidecars. They are runtime-only image data — no Rust or frontend test
 #       depends on them (the one vitest test that names them mocks `fetch`).
 #       Use this for LLM-driven contributors running the docs/AI-CONTRIBUTOR.md
@@ -32,9 +39,11 @@ set -euo pipefail
 
 NO_TILT="${PHASE_SETUP_NO_TILT:-0}"
 AGENT="${PHASE_SETUP_AGENT:-0}"
+ENGINE="${PHASE_SETUP_ENGINE:-0}"
 for arg in "$@"; do
   case "$arg" in
     --no-tilt)         NO_TILT=1 ;;
+    --engine)          ENGINE=1 ;;
     --agent|--no-scryfall) AGENT=1 ;;
     -h|--help)
       sed -n '3,30p' "$0" | sed 's/^# \{0,1\}//'
@@ -42,7 +51,8 @@ for arg in "$@"; do
       ;;
     *)
       echo "unknown arg: $arg" >&2
-      echo "  --agent             skip Scryfall image sidecars (LLM contributor mode)" >&2
+      echo "  --engine            card/engine contributor mode: MTGJSON + card data + CR only (no pnpm, no WASM)" >&2
+      echo "  --agent             --engine, plus generate card data inline (LLM contributor mode)" >&2
       echo "  --no-tilt           skip Tilt detection; eager-build WASM + card-data" >&2
       echo "  -h, --help          this message" >&2
       exit 2
@@ -52,7 +62,7 @@ done
 
 # Normalize env-var booleans so PHASE_SETUP_AGENT=true / yes / on all work,
 # not just the literal "1".
-for var in NO_TILT AGENT; do
+for var in NO_TILT AGENT ENGINE; do
   case "$(eval echo \$$var)" in
     1|true|TRUE|yes|YES|on|ON) eval "$var=1" ;;
     *)                          eval "$var=0" ;;
@@ -66,12 +76,23 @@ done
 # contributor. Force NO_TILT in agent mode so card-data.json is guaranteed to
 # exist when setup.sh exits.
 if [ "$AGENT" = 1 ]; then
+  ENGINE=1
+fi
+# Engine mode always generates card data inline, even when Tilt is installed.
+# gen-card-data.sh promotes a newer MTGJSON token/subtype catalog into
+# crates/engine/data/ — an engine input. If Tilt's card-data resource does that
+# AFTER clippy/test-engine have already built the engine against the committed
+# catalog, every engine root rebuilds a second time on first start. Promoting
+# first means `tilt up -- engine` builds the engine once.
+if [ "$ENGINE" = 1 ]; then
   NO_TILT=1
 fi
 
 echo "=== phase.rs Setup ==="
 if [ "$AGENT" = 1 ]; then
-  echo "    (mode: agent — Scryfall image fetchers skipped)"
+  echo "    (mode: agent — engine only, card data generated inline)"
+elif [ "$ENGINE" = 1 ]; then
+  echo "    (mode: engine — MTGJSON + card data + CR; no Scryfall, no pnpm, no WASM)"
 fi
 echo ""
 
@@ -80,9 +101,13 @@ echo ""
 # gen-scryfall-*.sh — preflight here so missing-curl fails with a tidy
 # message instead of a deep stack trace from inside a child script.
 missing=()
-for tool in cargo pnpm jq curl; do
+for tool in cargo jq curl; do
   command -v "$tool" >/dev/null 2>&1 || missing+=("$tool")
 done
+# pnpm only feeds the client; engine mode never touches it.
+if [ "$ENGINE" != 1 ]; then
+  command -v pnpm >/dev/null 2>&1 || missing+=("pnpm")
+fi
 if [ "${#missing[@]}" -ne 0 ]; then
   echo "ERROR: missing required tools: ${missing[*]}" >&2
   echo "  cargo: https://rustup.rs/" >&2
@@ -109,7 +134,9 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib/pnpm-preflight.sh
 source "$SCRIPT_DIR/lib/pnpm-preflight.sh"
-pnpm_preflight_check client || exit 1
+if [ "$ENGINE" != 1 ]; then
+  pnpm_preflight_check client || exit 1
+fi
 
 # --- Preflight: soft tool (tilt-dev/tilt, NOT other CLIs named "tilt") ---
 # Multiple unrelated binaries ship as `tilt` (e.g. Go template tools). The
@@ -134,8 +161,8 @@ FAIL=0
 # --- Scryfall sidecars (skipped in agent mode) ---
 # These are runtime-only image data for the React frontend. No Rust or vitest
 # test depends on them — see docs/AI-CONTRIBUTOR.md and CLAUDE.md.
-if [ "$AGENT" = 1 ]; then
-  echo "Step 1: Skipping Scryfall sidecars (agent mode)."
+if [ "$ENGINE" = 1 ]; then
+  echo "Step 1: Skipping Scryfall sidecars (engine mode — frontend-only image data)."
 else
   echo "Step 1: Fetching Scryfall sidecars (parallel)..."
   ./scripts/gen-scryfall-images.sh         & PID_IMAGES=$!
@@ -169,29 +196,44 @@ if [ ! -f docs/MagicCompRules.txt ]; then
 fi
 
 # --- Frontend deps (parallel-safe with cargo work below) ---
-echo ""
-echo "Step 2: Installing frontend dependencies..."
-(cd client && pnpm install) &
-PID_PNPM=$!
-
-# The lobby worker is a separate npm project (its own package-lock.json), and
-# Tilt's 'lobby-worker' resource runs `npm run dev` from it. Without this the
-# resource comes up red on a fresh clone and deck URL import stays broken.
-# Guarded on presence for the same reason release.yml guards its deploy job:
-# commits older than the Worker have no lobby-worker/, and setup must not hard
-# fail there.
+PID_PNPM=""
 PID_WORKER=""
-if [ -d lobby-worker ]; then
-  (cd lobby-worker && npm install) &
-  PID_WORKER=$!
+if [ "$ENGINE" = 1 ]; then
+  echo ""
+  echo "Step 2: Skipping frontend dependencies (engine mode)."
+else
+  echo ""
+  echo "Step 2: Installing frontend dependencies..."
+  (cd client && pnpm install) &
+  PID_PNPM=$!
+
+  # The lobby worker is a separate npm project (its own package-lock.json), and
+  # Tilt's 'lobby-worker' resource runs `npm run dev` from it. Without this the
+  # resource comes up red on a fresh clone and deck URL import stays broken.
+  # Guarded on presence for the same reason release.yml guards its deploy job:
+  # commits older than the Worker have no lobby-worker/, and setup must not hard
+  # fail there.
+  if [ -d lobby-worker ]; then
+    (cd lobby-worker && npm install) &
+    PID_WORKER=$!
+  fi
 fi
 
-# --- Card-data + WASM ---
+# --- Card-data (+ WASM outside engine mode) ---
 if [ "$USE_TILT" = 1 ]; then
   echo ""
   echo "Step 3: Tilt detected — skipping eager WASM + card-data build."
   echo "        \`tilt up\` will run both on first start via the"
   echo "        'wasm' and 'card-data' resources."
+elif [ "$ENGINE" = 1 ]; then
+  echo ""
+  echo "Step 3: Building card-data (inline, before Tilt, so the engine is built once)..."
+  ./scripts/gen-card-data.sh || FAIL=1
+  if [ -n "$(git status --porcelain -- crates/engine/data/known-tokens.toml crates/engine/data/oracle-subtypes.json crates/engine/data/mtgjson-vintage)" ]; then
+    echo "        Note: gen-card-data promoted a newer MTGJSON catalog into crates/engine/data/."
+    echo "        That is expected and correct for local builds. Do NOT commit those files in a"
+    echo "        card PR — a maintainer refreshes them in dedicated chore PRs."
+  fi
 else
   echo ""
   echo "Step 3: Building WASM + card-data (parallel)..."
@@ -202,7 +244,9 @@ else
   wait $PID_WASM  || FAIL=1
 fi
 
-wait $PID_PNPM || FAIL=1
+if [ -n "$PID_PNPM" ]; then
+  wait $PID_PNPM || FAIL=1
+fi
 if [ -n "$PID_WORKER" ]; then
   wait $PID_WORKER || FAIL=1
 fi
@@ -220,11 +264,19 @@ echo ""
 echo "Done!"
 echo ""
 if [ "$AGENT" = 1 ]; then
-  echo "Agent mode complete. cargo / clippy / test-engine / gen-card-data /"
-  echo "coverage / semantic-audit are all dev-ready. See docs/AI-CONTRIBUTOR.md."
+  echo "Agent mode complete. Card data is generated. Next: \`tilt up -- engine\` (engine loop:"
+  echo "card-data + clippy + test-engine), then \`./scripts/verify-card.sh \"<Card>\"\` to"
+  echo "verify. See docs/AI-CONTRIBUTOR.md."
+elif [ "$ENGINE" = 1 ]; then
+  echo "Engine mode complete. Next: run \`tilt up -- engine\` to start the engine loop"
+  echo "(card-data + clippy + test-engine; first start is a cold build, ~15-30 min)."
+  echo "Verify a card with \`./scripts/verify-card.sh \"<Card Name>\"\`."
+  echo "Budget: the warm engine loop holds ~30-40 GB under target/. Anything more"
+  echo "means a second engine build was started somewhere — see docs/AI-CONTRIBUTOR.md §2.5."
 elif [ "$USE_TILT" = 1 ]; then
   echo "Next: run \`tilt up\` to start the dev loop (wasm + card-data + frontend)."
-  echo "      Add \`-- server\` / \`-- test\` / \`-- lint\` to start optional groups."
+  echo "      Add \`-- server\` / \`-- test\` / \`-- lint\` to start optional groups;"
+  echo "      \`tilt up -- engine\` is the engine-only loop (card-data + clippy + test-engine)."
 else
   echo "Next: run \`cd client && pnpm dev\` to start the dev server."
 fi

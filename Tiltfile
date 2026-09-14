@@ -7,11 +7,34 @@
 #   tilt up -- server test lint          full stack
 #   tilt up -- tauri                     desktop app (replaces frontend)
 #
+#   tilt up -- engine                    ENGINE LOOP: card-data + clippy + test-engine and
+#                                        nothing else — exactly what a card / rules-engine
+#                                        contribution is gated on (docs/AI-CONTRIBUTOR.md).
+#   tilt up -- engine test               engine loop + test-ai
+#   tilt up -- engine server             engine loop + game server
+#   tilt up -- data                      DATA LOOP: card-data only (one tool-profile engine
+#                                        build) — for consumers of client/public/card-data.json
+#                                        that build the engine themselves (other repos, FFI).
+#
 # All resources are always visible in the Tilt UI — opt-in groups just
 # control which auto-start. Click any stopped resource to start it on demand.
+#
+# The exceptions are `engine` and `data`: they also REMOVE the other resources
+# (`config.set_enabled_resources`), so nothing can start them by accident. One
+# compile of the engine crate is ~1 GB of rlib plus 1-2 GB of incremental state
+# per profile (dev-profile libengine rlib measured at 0.86 GB), and the core
+# loop adds a fourth (wasm) and a fifth (draft-pools, dev profile) engine build
+# on top of the three the engine loop needs. A card contributor never runs the
+# client, so `-- engine` pays for three engine builds instead of five, and its
+# test/lint resources auto-start without needing `test lint` as well.
 
-config.define_string_list('enable', args = True, usage = 'Resource groups to auto-start: server, tauri, test, lint, https')
+config.define_string_list('enable', args = True, usage = 'Resource groups to auto-start: server, tauri, test, lint, https; or `engine` (engine-only loop) / `data` (card-data only)')
 enabled = config.parse().get('enable', [])
+
+# `engine` and `data` are loops, not groups: they restrict the resource set at
+# the bottom of this file, and `engine` auto-starts its own test/lint resources.
+ENGINE_LOOP = 'engine' in enabled
+DATA_LOOP = 'data' in enabled and not ENGINE_LOOP
 
 # ---------------------------------------------------------------------------
 # Build
@@ -196,35 +219,50 @@ local_resource('server',
 # Compile the native test harnesses once, then let the test runners fan out to
 # parallel execution. Without this, test-engine and test-ai each serialize on
 # the cargo build lock during their compile phase. `--no-run` builds the test
-# binaries without executing them; the downstream `cargo nextest run -p ...` then
-# finds everything fingerprint-fresh and just runs (no recompile). nextest (the
-# same runner CI uses) schedules every test across all binaries in one global
-# pool, overlapping the lib and integration harnesses instead of running them
+# binaries without executing them; the downstream test runners then find
+# everything fingerprint-fresh and just run (no recompile). nextest (the same
+# runner CI uses) schedules every test across all binaries in one global pool,
+# overlapping the lib and integration harnesses instead of running them
 # back-to-back like `cargo test` — much faster local feedback at zero compile
 # cost. Default features — matching the test resources, which (unlike
 # `cargo test-all`) do not enable engine/proptest; a feature mismatch here would
 # force a rebuild.
+#
+# "Fingerprint-fresh" only holds if the runners build the SAME package
+# selection as this resource, so all three commands are derived from one
+# string (NATIVE_TEST_PACKAGES) and the runners pick their tests with a nextest
+# filterset (`-E 'package(...)'`) instead of `-p`. With `-p phase-engine` alone
+# cargo unifies features differently — phase-ai's tracing-subscriber turns on
+# tracing-core's `default` feature, which nothing in phase-engine's own graph
+# does — so every phase-engine unit got a second metadata hash and test-engine
+# recompiled the whole engine (17 min, ~10 GB) right after build-native had.
+#
+# phase-ai is only compiled here when test-ai can run: in the engine loop
+# without `test`, nothing consumes its test harness (the card gate is clippy +
+# test-engine + card-data, and clippy still type-checks phase-ai), so building
+# it would only add ~1 GB of artifacts and incremental state to target/debug.
+NATIVE_TEST_PACKAGES = '-p phase-engine' + ('' if ENGINE_LOOP and 'test' not in enabled else ' -p phase-ai')
 local_resource('build-native',
-    cmd = 'cargo nextest run -p phase-engine -p phase-ai --no-run',
+    cmd = 'cargo nextest run ' + NATIVE_TEST_PACKAGES + ' --no-run',
     deps = ENGINE_SRC + ENGINE_TESTS + AI_SRC + AI_TESTS,
     ignore = TMP_IGNORE,
     allow_parallel = True,
-    auto_init = 'test' in enabled,
+    auto_init = 'test' in enabled or ENGINE_LOOP,
     labels = ['test'],
 )
 
 local_resource('test-engine',
-    cmd = 'cargo nextest run -p phase-engine',
+    cmd = 'cargo nextest run ' + NATIVE_TEST_PACKAGES + " -E 'package(phase-engine)'",
     deps = ENGINE_SRC + ENGINE_TESTS,
     ignore = TMP_IGNORE,
     resource_deps = ['build-native'],
     allow_parallel = True,
-    auto_init = 'test' in enabled,
+    auto_init = 'test' in enabled or ENGINE_LOOP,
     labels = ['test'],
 )
 
 local_resource('test-ai',
-    cmd = 'cargo nextest run -p phase-ai',
+    cmd = 'cargo nextest run ' + NATIVE_TEST_PACKAGES + " -E 'package(phase-ai)'",
     deps = ENGINE_SRC + AI_SRC + AI_TESTS,
     ignore = TMP_IGNORE,
     resource_deps = ['build-native'],
@@ -259,7 +297,7 @@ local_resource('clippy',
     cmd = ['bash', '-c', 'CARGO_TARGET_DIR=target/clippy cargo clippy --all-targets -- -D warnings && CARGO_TARGET_DIR=target/clippy ./scripts/check-interaction-bindings.sh --check'],
     deps = ['crates/', 'client/src/adapter/generated/interaction/index.ts', 'scripts/check-interaction-bindings.sh'],
     ignore = TMP_IGNORE,
-    auto_init = 'lint' in enabled,
+    auto_init = 'lint' in enabled or ENGINE_LOOP,
     allow_parallel = True,
     labels = ['lint'],
 )
@@ -638,3 +676,18 @@ local_resource('probe-pin-census',
     allow_parallel = True,
     labels = ['lint'],
 )
+
+# ---------------------------------------------------------------------------
+# Engine loop: restrict the resource set (see the usage block at the top)
+# ---------------------------------------------------------------------------
+if DATA_LOOP:
+    config.set_enabled_resources(['card-data', 'coverage'])
+elif ENGINE_LOOP:
+    engine_resources = ['card-data', 'build-native', 'test-engine', 'clippy', 'coverage']
+    if 'test' in enabled:
+        engine_resources.append('test-ai')
+    if 'server' in enabled:
+        engine_resources.append('server')
+    if 'lint' in enabled:
+        engine_resources += ['probe-pin-check', 'probe-pin-e2e', 'probe-pin-census']
+    config.set_enabled_resources(engine_resources)

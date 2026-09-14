@@ -444,16 +444,11 @@ Run formatting directly:
 cargo fmt --all
 ```
 
-For Rust/engine/parser changes, prefer Tilt and fall back only when Tilt is not running:
+For Rust/engine/parser changes, verify through Tilt (start `tilt up -- engine` if it is down; there is no direct-cargo fallback):
 
 ```bash
-if tilt get uiresource clippy >/dev/null 2>&1; then
-  ./scripts/tilt-wait.sh --timeout 240 clippy test-engine card-data
-else
-  cargo clippy --all-targets -- -D warnings
-  cargo test -p phase-engine
-  ./scripts/gen-card-data.sh
-fi
+# Tilt down? start it (`tilt up -- engine`) and wait — a direct cargo run is a second full engine build.
+./scripts/tilt-wait.sh --timeout 900 clippy test-engine card-data
 ```
 
 For frontend changes:

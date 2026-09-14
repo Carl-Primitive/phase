@@ -118,7 +118,7 @@ git clone https://github.com/phase-rs/phase && cd phase
 cd client && pnpm dev  # Start dev server at localhost:5173
 ```
 
-If `tilt` is installed, `setup.sh` skips the eager WASM + card-data build and `tilt up` handles them. Flags: `--agent` (LLM mode — skip Scryfall art; see [docs/AI-CONTRIBUTOR.md](docs/AI-CONTRIBUTOR.md)), `--no-tilt` (force inline build).
+If `tilt` is installed, `setup.sh` skips the eager WASM + card-data build and `tilt up` handles them. Flags: `--engine` (card/rules-engine contributors — MTGJSON + card data + Comprehensive Rules only, no pnpm or WASM; pair it with `tilt up -- engine`, the engine-only loop), `--agent` (`--engine` plus inline card-data generation for LLM contributors; see [docs/AI-CONTRIBUTOR.md](docs/AI-CONTRIBUTOR.md)), `--no-tilt` (force inline build).
 
 ### Manual Steps
 
@@ -391,7 +391,7 @@ Transport-agnostic `EngineAdapter` interface with multiple implementations:
 
 ### Build Commands
 
-> **Tip:** If you're running Tilt (`tilt up`), prefer `./scripts/tilt-wait.sh <resource>` over the direct cargo/pnpm equivalents — Tilt continuously rebuilds in the background and `tilt-wait.sh` blocks only until the relevant resource settles, avoiding target-lock contention. When Tilt is **not** running, fall back to the commands below. See `CLAUDE.md` § "Canonical verification pattern" for the conditional template used by agents and skills.
+> **Tip:** If you're running Tilt (`tilt up`, or `tilt up -- engine` for engine-only work), prefer `./scripts/tilt-wait.sh <resource>` over the direct cargo/pnpm equivalents — Tilt continuously rebuilds in the background and `tilt-wait.sh` blocks only until the relevant resource settles, avoiding target-lock contention. Each direct command below that differs from Tilt's in profile, features, or target dir is a full extra build of the engine crate, so when Tilt is running, let it do the work. Card contributors: `./scripts/verify-card.sh "<Card Name>"` is the single verification entrypoint.
 
 ```bash
 # Rust (uses cargo-nextest for test execution)

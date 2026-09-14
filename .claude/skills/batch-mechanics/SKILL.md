@@ -89,15 +89,9 @@ When a teammate finishes implementing, direct them through these steps **in orde
 **Step 2 — Run verification (prefer Tilt; fall back to direct cargo when Tilt is down — see CLAUDE.md § 'Canonical verification pattern'):**
 > "Run these commands and fix any failures:
 > 1. `cargo fmt --all` (always direct)
-> 2. Verify clippy + tests:
+> 2. Verify clippy + tests through Tilt (start `tilt up -- engine` if it is down; no direct-cargo fallback):
 >    ```bash
->    if tilt get uiresource clippy >/dev/null 2>&1; then
->      ./scripts/tilt-wait.sh --timeout 240 clippy test-engine card-data
->    else
->      cargo clippy --all-targets -- -D warnings
->      cargo test -p phase-engine
->      ./scripts/gen-card-data.sh
->    fi
+>    ./scripts/tilt-wait.sh --timeout 900 clippy test-engine card-data
 >    ```
 > 3. If you added or changed parser output, accept new snapshots: `cargo insta accept`
 > 4. Run coverage (one-shot, always direct): `cargo coverage`"

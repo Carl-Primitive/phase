@@ -7,7 +7,7 @@ export const meta = {
     { title: 'Plan', detail: 'engine-planner + review-engine-plan loop' },
     { title: 'Implement', detail: 'branch + implement the card on the AI-CONTRIBUTOR §4 prompt' },
     { title: 'Review', detail: 'review-impl loop + independent fresh-context cross-check' },
-    { title: 'Verify', detail: 'fmt, combinator gate, clippy/test/card-data, coverage, semantic-audit' },
+    { title: 'Verify', detail: 'scripts/verify-card.sh: fmt, Tilt gates, coverage, semantic-audit, Gate A' },
     { title: 'PR', detail: 'commit, push, open PR with the §7 body template' },
   ],
 }
@@ -245,21 +245,26 @@ function fixCrossCheckPrompt(card, findings) {
 
 function verifyPrompt(card) {
   return (
-    `Run Developer-track verification for the card "${card}" in this exact order, ` +
-    `fixing in-loop on failure (max ${MAX_VERIFY_RETRIES} retries per command) ` +
+    `Run Developer-track verification for the card "${card}" with the single ` +
+    `entrypoint, fixing in-loop on failure (max ${MAX_VERIFY_RETRIES} retries) ` +
     `before continuing:\n` +
-    `1. cargo fmt --all   (always direct)\n` +
-    `2. ./scripts/check-parser-combinators.sh   (Gate A; one-shot, direct)\n` +
-    `3. If \`tilt get uiresource clippy >/dev/null 2>&1\` succeeds: ` +
-    `./scripts/tilt-wait.sh --timeout 240 clippy test-engine card-data ; else: ` +
-    `cargo clippy-strict && cargo test -p phase-engine && ./scripts/gen-card-data.sh\n` +
-    `4. cargo coverage   (confirm "${card}" is now supported:true, gap_count:0 -> ` +
-    `set coverageSupported)\n` +
-    `5. cargo semantic-audit   (confirm "${card}" has 0 findings -> set ` +
-    `semanticAuditClean)\n` +
-    `Set passed=true only if every command is clean AND coverageSupported AND ` +
-    `semanticAuditClean. Record each command's status; list any unresolved ` +
-    `failures in failures[].`
+    `    ./scripts/verify-card.sh "${card}"\n` +
+    `It runs, in order: cargo fmt --all; tilt-wait clippy test-engine card-data ` +
+    `(Tilt's warm engine loop); coverage for "${card}" (supported:true, ` +
+    `gap_count:0 -> set coverageSupported from its "ok"/"FAIL" line); ` +
+    `cargo semantic-audit (0 findings for "${card}" -> set semanticAuditClean); ` +
+    `Gate A (./scripts/check-parser-combinators.sh).\n` +
+    `Exit 3 means Tilt is not running — that is not a failure: start the engine ` +
+    `loop (nohup tilt up --stream -- engine > /tmp/tilt-up.log 2>&1 &), wait until ` +
+    `\`tilt get uiresource clippy\` exits 0, and rerun. NEVER run cargo clippy / ` +
+    `cargo test / cargo build / cargo coverage directly, never add --features, ` +
+    `--profile, --release or CARGO_TARGET_DIR to a cargo command, and never ` +
+    `verify from a second git worktree: each is a full extra build of the ` +
+    `engine crate.\n` +
+    `Set passed=true only if the script's last line is \`verify-card PASS ` +
+    `head=<sha> tree=clean\` AND coverageSupported AND semanticAuditClean. ` +
+    `Record that line verbatim as the "verify-card" command status; list any ` +
+    `unresolved failures in failures[].`
   )
 }
 
@@ -284,7 +289,8 @@ function prPrompt(card, { impl, verify, partial }) {
   return (
     `Commit the working-tree change for "${card}", push the branch, and open a PR. ` +
     `Run:\n` +
-    `git add -A && git commit -m ${JSON.stringify(`${title}`)} && git push -u origin HEAD\n` +
+    `git add -A -- . ':(exclude)crates/engine/data/known-tokens.toml' ':(exclude)crates/engine/data/oracle-subtypes.json' ':(exclude)crates/engine/data/mtgjson-vintage' && git commit -m ${JSON.stringify(`${title}`)} && git push -u origin HEAD\n` +
+    `(the three excluded files are MTGJSON catalogs gen-card-data regenerates locally; a maintainer refreshes them in chore PRs, never a card PR)\n` +
     `Then: gh pr create --title ${JSON.stringify(title)} --body <BODY>  ` +
     `(do NOT pass --label; the upstream auto-labeler handles it).\n\n` +
     `Use exactly this PR body:\n\n${body}\n\n` +

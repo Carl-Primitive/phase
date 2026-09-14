@@ -271,7 +271,7 @@ The trigger pipeline responds to `GameEvent` variants. If no existing event cove
 - [ ] Integration test: full game flow → event fires → trigger on stack → resolves, with an assertion that FAILS if the change is reverted (see `/card-test`); parser + matcher tests alone are shape tests and do not prove runtime behavior
 - [ ] APNAP test: multiple player triggers → correct stack order
 - [ ] Constraint test: "once per turn" fires once, not twice
-- [ ] Verify per CLAUDE.md § "Canonical verification pattern" — `cargo fmt --all`, then if `tilt get uiresource clippy >/dev/null 2>&1`: `./scripts/tilt-wait.sh --timeout 240 clippy test-engine card-data`; else: `cargo clippy --all-targets -- -D warnings` + `cargo test -p phase-engine` + `./scripts/gen-card-data.sh`.
+- [ ] Verify per CLAUDE.md § "Canonical verification pattern" — `cargo fmt --all`, then `./scripts/tilt-wait.sh --timeout 900 clippy test-engine card-data` (Tilt down? start `tilt up -- engine` and wait — no direct-cargo fallback, it would be a second full engine build); for a card, `./scripts/verify-card.sh "<Card Name>"` does all of this plus coverage, semantic-audit and Gate A.
 
 ---
 
