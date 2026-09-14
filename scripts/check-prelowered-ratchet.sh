@@ -22,6 +22,12 @@
 # output, not source, and their counts move for reasons unrelated to producers.
 #
 # Usage: scripts/check-prelowered-ratchet.sh
+#
+# Deliberately avoids `declare -A` (bash 4+): macOS ships bash 3.2 as
+# `/bin/bash` (and often as the first `bash` on PATH), where associative
+# arrays aren't available and this script would silently no-op every check.
+# Parallel indexed arrays + linear lookup replace the two maps; ledgers here
+# are small (dozens of entries at most), so the O(n) lookup cost is immaterial.
 
 set -euo pipefail
 
@@ -38,52 +44,78 @@ if [[ ! -f "$LEDGER" ]]; then
   exit 1
 fi
 
-# --- ledger -> associative array ------------------------------------------
-declare -A ceiling=()
+# --- ledger -> parallel arrays ----------------------------------------------
+ceiling_paths=()
+ceiling_limits=()
 while read -r path limit _rest; do
   [[ -z "${path:-}" || "$path" == \#* ]] && continue
   if ! [[ "$limit" =~ ^[0-9]+$ ]]; then
     echo "prelowered-ratchet: malformed ledger line for '$path' (ceiling '$limit')" >&2
     exit 1
   fi
-  ceiling["$path"]="$limit"
+  ceiling_paths+=("$path")
+  ceiling_limits+=("$limit")
 done < "$LEDGER"
 
-# --- measured counts -------------------------------------------------------
-declare -A actual=()
+ceiling_index_of() {
+  local target="$1" i
+  for i in "${!ceiling_paths[@]}"; do
+    [[ "${ceiling_paths[$i]}" == "$target" ]] && { echo "$i"; return 0; }
+  done
+  return 1
+}
+
+# --- measured counts ---------------------------------------------------------
+actual_paths=()
+actual_counts=()
 while IFS=: read -r path count; do
   [[ -z "${path:-}" ]] && continue
   # Native Windows ripgrep emits backslashes; ledger paths use Git's slashes.
   path="${path//\\//}"
-  actual["$path"]="$count"
+  actual_paths+=("$path")
+  actual_counts+=("$count")
 done < <(
   rg --count-matches --glob '*.rs' --glob '!**/snapshots/**' "$NEEDLE" "$SCOPE" 2>/dev/null || true
 )
+
+actual_index_of() {
+  local target="$1" i
+  for i in "${!actual_paths[@]}"; do
+    [[ "${actual_paths[$i]}" == "$target" ]] && { echo "$i"; return 0; }
+  done
+  return 1
+}
 
 status=0
 slack=()
 
 # Over ceiling, or present with no ledger entry.
-for path in "${!actual[@]}"; do
-  count="${actual[$path]}"
-  if [[ -z "${ceiling[$path]+set}" ]]; then
+for i in "${!actual_paths[@]}"; do
+  path="${actual_paths[$i]}"
+  count="${actual_counts[$i]}"
+  if ! j="$(ceiling_index_of "$path")"; then
     echo "prelowered-ratchet: FAIL — $path has $count '$NEEDLE' occurrence(s) but no ledger entry." >&2
     echo "    A new PreLowered producer in a new file is exactly what this gate exists to catch." >&2
     echo "    If this is intentional, add it to scripts/prelowered-ratchet.txt with a reason." >&2
     status=1
-  elif (( count > ceiling[$path] )); then
-    echo "prelowered-ratchet: FAIL — $path has $count '$NEEDLE' occurrence(s), ceiling is ${ceiling[$path]}." >&2
+    continue
+  fi
+  limit="${ceiling_limits[$j]}"
+  if (( count > limit )); then
+    echo "prelowered-ratchet: FAIL — $path has $count '$NEEDLE' occurrence(s), ceiling is $limit." >&2
     echo "    Plan 05b converts PreLowered producers to IR nodes; the count may only decrease." >&2
     status=1
-  elif (( count < ceiling[$path] )); then
-    slack+=("$path ${ceiling[$path]} -> $count")
+  elif (( count < limit )); then
+    slack+=("$path $limit -> $count")
   fi
 done
 
 # A ledger entry that has reached zero should be removed, not left at 0.
-for path in "${!ceiling[@]}"; do
-  if [[ -z "${actual[$path]+set}" && "${ceiling[$path]}" != "0" ]]; then
-    slack+=("$path ${ceiling[$path]} -> 0  (entry can be deleted)")
+for j in "${!ceiling_paths[@]}"; do
+  path="${ceiling_paths[$j]}"
+  limit="${ceiling_limits[$j]}"
+  if ! actual_index_of "$path" >/dev/null && [[ "$limit" != "0" ]]; then
+    slack+=("$path $limit -> 0  (entry can be deleted)")
   fi
 done
 
