@@ -147,3 +147,53 @@ each of known shape. That is a work list over the grammar, not a grind over card
 - Reaching parity needs triggers, activated abilities, statics, replacements and
   conditions. The measured shape of the declines supports the original 2–3 week
   estimate for the top-50 slice.
+
+---
+
+# Does the output match the existing parser? (measured)
+
+Short answer: not by construction, but it bridges to it almost exactly.
+
+A naive bridge from schema shape to the engine's JSON, compared byte-for-byte
+against `card-data.json` (excluding `description`, which is regenerated prose):
+
+| Bridge state | Exact whole-card match |
+|---|---:|
+| Naive first pass | 83.6% |
+| + Ref wrapper, scope variants, implicit player default | 86.1% |
+| + PascalCase keyword names | **95.2%** |
+
+Measured on the 880 cards the new grammar fully parses AND the bridge can
+express. The remaining 41 are the grammar missing filter properties
+("attacking", "nonblack", "white"), not format incompatibility.
+
+## Three places the existing format is genuinely worse than a clean start
+
+1. **Scope is named in the variant, not carried on the target.** 23 sibling
+   clusters absorbing 48 tags: `Destroy`/`DestroyAll`, `Bounce`/`BounceAll`,
+   `Damage`/`DamageAll`/`DamageEachPlayer`, `Counter`/`CounterAll`. The project's
+   own CLAUDE.md names this exact smell. It is 5% of the vocabulary, so it is a
+   contained wart rather than a pervasive one.
+2. **Absence encodes a value.** `GainLife` omits `player` when the subject is the
+   controller, so a missing field means "you" rather than "unspecified". A
+   consumer that treats absent as unknown is silently wrong.
+3. **Keywords have two representations.** A bare keyword line hoists into a
+   `keywords` array; a granted keyword is an effect. Same concept, two shapes,
+   so every consumer handles it twice.
+
+## One place the existing format is BETTER, and the schema was wrong
+
+`QuantityExpr::Fixed` vs `QuantityExpr::Ref { qty: QuantityRef }` separates a
+constant from a reference to a dynamic game value. The schema flattened those
+into one enum, and the bridge had to restore the layering. The engine's design
+is right here and CLAUDE.md's "separate abstraction layers" rule is correct.
+
+## Recommendation
+
+Target the existing format. 95.2% already matches, the gap is grammar coverage
+rather than shape, and matching it buys upstreamability for very little.
+
+The reason to keep an independent schema was never aesthetics. It was that the
+project mandates refactoring these enums whenever a sibling cluster appears, so
+a frozen corpus built against them inherits every such refactor. That is a
+stability commitment to negotiate upstream, not a format to fork over.

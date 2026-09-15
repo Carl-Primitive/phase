@@ -1,5 +1,7 @@
 //! Grammar over the Oracle token stream, producing [`phase_card_schema`] values.
 
+#[cfg(feature = "corpus")]
+pub mod bridge;
 pub mod clause;
 pub mod prim;
 pub mod stream;

@@ -16,3 +16,7 @@ corpus = ["dep:serde_json"]
 [[example]]
 name = "differential"
 required-features = ["corpus"]
+
+[[example]]
+name = "bridge_diff"
+required-features = ["corpus"]
