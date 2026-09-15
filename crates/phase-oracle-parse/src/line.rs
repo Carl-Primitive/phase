@@ -6,8 +6,8 @@
 //! written order (CR 608.2c).
 
 use phase_oracle_ast::{
-    AbilityCost, AbilityDefinition, AbilityKind, Duration, Effect, PlayerScope, StaticAbility,
-    SubAbilityLink,
+    AbilityCondition, AbilityCost, AbilityDefinition, AbilityKind, Duration, Effect, PlayerScope,
+    StaticAbility, SubAbilityLink,
 };
 use phase_oracle_lex::{Token, TokenKind};
 
@@ -128,6 +128,52 @@ pub fn is_cant_regenerate(toks: &[Token], src: &str) -> bool {
     match phrase_alt(FORMS)(stream) {
         Ok((rest, _)) => is_exhausted(rest),
         Err(_) => false,
+    }
+}
+
+/// Lift a leading "If you do," off a sentence.
+///
+/// CR 608.2d: the clause performs the sentence it introduces only when the
+/// OPTIONAL effect before it actually happened. It is a gate, not an
+/// instruction, so removing it here keeps the effect grammar from needing an
+/// arm for a word that does nothing on its own.
+pub fn strip_if_you_do<'a>(
+    toks: &'a [Token],
+    src: &'a str,
+) -> (&'a [Token], Option<AbilityCondition>) {
+    let stream = Tokens::new(toks, src);
+    let Ok((rest, _)) = phrase_alt(&[("if you do", ()), ("if you don't", ())])(stream) else {
+        return (toks, None);
+    };
+    // Only the positive form is built: "if you don't" gates on the opposite
+    // outcome and the engine records a different signal for it.
+    if phrase_alt(&[("if you don't", ())])(stream).is_ok() {
+        return (toks, None);
+    }
+    let after = match rest.first() {
+        Some(t) if t.kind == TokenKind::Comma => rest.take_from_n(1),
+        _ => return (toks, None),
+    };
+    if after.is_empty() {
+        return (toks, None);
+    }
+    (
+        after.toks,
+        Some(AbilityCondition::EffectOutcome {
+            signal: phase_oracle_ast::EffectSignal::OptionalEffectPerformed,
+        }),
+    )
+}
+
+/// Lift a leading "You may" off a sentence.
+///
+/// CR 608.2d: a permission, not an instruction. The flag it sets is what a
+/// later "if you do" reads, which is why both are lifted in the same place.
+pub fn strip_you_may<'a>(toks: &'a [Token], src: &'a str) -> (&'a [Token], bool) {
+    let stream = Tokens::new(toks, src);
+    match phrase_alt(&[("you may", ())])(stream) {
+        Ok((rest, _)) if !rest.is_empty() => (rest.toks, true),
+        _ => (toks, false),
     }
 }
 
@@ -291,6 +337,7 @@ pub type Part = (
     SubAbilityLink,
     Option<Duration>,
     Option<PlayerScope>,
+    Option<AbilityCondition>,
 );
 
 /// Assemble a chain of parts into one definition.
@@ -304,20 +351,22 @@ pub fn assemble(
     description: String,
 ) -> Option<AbilityDefinition> {
     let mut it = parts.into_iter();
-    let (first, _, first_dur, first_scope) = it.next()?;
+    let (first, _, first_dur, first_scope, first_cond) = it.next()?;
     let mut root = AbilityDefinition::new(kind, first);
     root.refresh_mana_ability();
     root.cost = cost;
     root.duration = first_dur;
     root.player_scope = first_scope;
+    root.condition = first_cond;
     root.description = Some(description);
 
-    for (e, link, dur, scope) in it {
+    for (e, link, dur, scope, cond) in it {
         let mut next = AbilityDefinition::spell(e);
         next.refresh_mana_ability();
         next.sub_link = link;
         next.duration = dur;
         next.player_scope = scope;
+        next.condition = cond;
         root.chain(next);
     }
     Some(root)

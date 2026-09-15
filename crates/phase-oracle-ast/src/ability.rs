@@ -41,6 +41,28 @@ impl SubAbilityLink {
 }
 
 /// CR 602.5d and friends: when an activated ability may be activated.
+/// CR 608.2: a predicate checked as this ability resolves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum AbilityCondition {
+    /// CR 608.2d: "If you do, ..." — the preceding OPTIONAL effect was
+    /// actually performed. A signal about what happened during this same
+    /// resolution, not a fact about the game state.
+    EffectOutcome { signal: EffectSignal },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum EffectSignal {
+    OptionalEffectPerformed,
+}
+
+/// CR 601.2c + CR 115.6: how many targets a slot allows.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MultiTargetSpec {
+    pub min: usize,
+    pub max: crate::qty::Quantity,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum AbilityTag {
@@ -91,7 +113,7 @@ pub struct AbilityDefinition {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ability_tag: Option<AbilityTag>,
     /// Always printed, even when null.
-    pub condition: Option<serde_json::Value>,
+    pub condition: Option<AbilityCondition>,
     pub optional_targeting: bool,
     /// CR 608.2d: "You may …".
     pub optional: bool,
@@ -100,6 +122,9 @@ pub struct AbilityDefinition {
     /// each becoming the acting player in APNAP order. "Each opponent mills a
     /// card" is a controller-shaped `Mill` iterated over opponents, NOT a
     /// mill whose target is the opponents.
+    /// CR 115.6: "up to one target creature" — the slot may legally take none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub multi_target: Option<MultiTargetSpec>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub player_scope: Option<PlayerScope>,
     #[serde(skip_serializing_if = "SubAbilityLink::is_continuation")]
@@ -139,6 +164,7 @@ impl AbilityDefinition {
             optional_targeting: false,
             optional: false,
             forward_result: false,
+            multi_target: None,
             player_scope: None,
             sub_link: SubAbilityLink::ContinuationStep,
             is_mana_ability: false,

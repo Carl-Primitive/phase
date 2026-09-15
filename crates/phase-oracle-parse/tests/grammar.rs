@@ -1529,21 +1529,23 @@ fn a_conjunction_that_names_a_new_subject_is_a_new_clause() {
 }
 
 #[test]
-fn a_tagged_ability_word_keeps_its_tag_but_loses_its_word() {
-    // CR 702.142b: "boast" and friends look like ability words but name a
-    // CLASS of ability other cards refer to, so the engine drops the word from
-    // the prose and keeps a tag.
+fn an_ability_word_is_kept_in_an_abilitys_prose_and_dropped_from_a_triggers() {
+    // The word leaves the TOKENS either way — no production has an arm for it —
+    // but the engine keeps it in an ABILITY's printed description and drops it
+    // from a TRIGGER's. Measured and decisive: 477 keeps against 9 for
+    // abilities, 0 against 296 for triggers.
     let v = abilities(
         "Aerial Doombot",
         "Power-up — {5}{U}: Put three +1/+1 counters on ~.",
     );
+    // CR 702.142b: this one also names a CLASS of ability other cards refer to.
     assert_eq!(v[0]["ability_tag"], json!({"type": "PowerUp"}));
     assert_eq!(
         v[0]["description"],
-        "{5}{U}: Put three +1/+1 counters on ~."
+        "Power-up — {5}{U}: Put three +1/+1 counters on ~."
     );
 
-    // An untagged ability word leaves nothing behind.
+    // A trigger drops it.
     let plain = triggers(
         "Whatever",
         "Magecraft — Whenever you cast a spell, draw a card.",
@@ -1805,4 +1807,46 @@ fn a_step_with_no_possessive_fires_on_every_turn() {
     );
     assert_eq!(each[0]["phase"], "End");
     assert_eq!(each[0]["constraint"], json!(null));
+}
+
+// ---------------------------------------------------------------------------
+// Permission and the gate that reads it
+// ---------------------------------------------------------------------------
+
+#[test]
+fn you_may_is_a_permission_and_if_you_do_is_the_gate_that_reads_it() {
+    // CR 608.2d. Neither is an instruction, so both are lifted off the sentence
+    // before the effect grammar sees it — and the flag the first one sets is
+    // exactly what the second one tests.
+    let v = abilities(
+        "Whatever",
+        "You may discard a card. If you do, draw two cards.",
+    );
+    assert_eq!(v[0]["optional"], true);
+    assert_eq!(v[0]["effect"]["type"], "Discard");
+    assert_eq!(
+        v[0]["sub_ability"]["condition"],
+        json!({"type": "EffectOutcome", "signal": "OptionalEffectPerformed"})
+    );
+    assert_eq!(v[0]["sub_ability"]["effect"]["type"], "Draw");
+    // The gate belongs to the sub-ability, not to the permission above it.
+    assert_eq!(v[0]["condition"], json!(null));
+}
+
+#[test]
+fn a_body_without_a_permission_is_not_optional() {
+    let v = abilities("Whatever", "Draw a card.");
+    assert_eq!(v[0]["optional"], false);
+    assert_eq!(v[0]["condition"], json!(null));
+}
+
+#[test]
+fn if_you_dont_is_deliberately_not_built() {
+    // It gates on the OPPOSITE outcome and the engine records a different
+    // signal, so treating it as the positive form would invert the card.
+    let p = parse_card(
+        "Whatever",
+        "You may discard a card. If you don't, draw two cards.",
+    );
+    assert!(!p.is_complete());
 }

@@ -68,7 +68,7 @@ pub fn parse_card(name: &str, oracle: &str) -> CardParse {
     // chain, because the engine treats a spell's whole printed body as a single
     // definition whose description carries the newlines (CR 608.2c, written
     // order). Keyword, activated and triggered lines each stand alone.
-    let mut spell_run: Vec<(Vec<line::Part>, String)> = Vec::new();
+    let mut spell_run: Vec<(Vec<line::Part>, String, bool)> = Vec::new();
 
     // CR 700.2: a modal header governs the bullet lines that FOLLOW it, so the
     // header's counts are held until the modes have been collected.
@@ -88,7 +88,7 @@ pub fn parse_card(name: &str, oracle: &str) -> CardParse {
             match spell_line(&body, &src) {
                 // A mode is an ability of its own, with no description: the
                 // printed text lives in `mode_descriptions` instead.
-                Ok(Lowered::SpellBody(chain, _)) => {
+                Ok(Lowered::SpellBody(chain, _, _)) => {
                     match line::assemble(AbilityKind::Spell, None, chain, String::new()) {
                         Some(mut a) => {
                             a.description = None;
@@ -112,7 +112,7 @@ pub fn parse_card(name: &str, oracle: &str) -> CardParse {
 
         match parse_line(&l, &src) {
             Ok(Lowered::Keywords(mut kws)) => out.keywords.append(&mut kws),
-            Ok(Lowered::SpellBody(chain, desc)) => spell_run.push((chain, desc)),
+            Ok(Lowered::SpellBody(chain, desc, may)) => spell_run.push((chain, desc, may)),
             Ok(Lowered::Statics(mut sa)) => out.static_abilities.append(&mut sa),
             Ok(Lowered::Ability(a)) => out.abilities.push(*a),
             Ok(Lowered::Trigger(t)) => out.triggers.push(*t),
@@ -150,32 +150,35 @@ pub fn parse_card(name: &str, oracle: &str) -> CardParse {
 /// The FIRST line's parts keep their own links; each later line opens with a
 /// `SequentialSibling`, and the description is the lines joined by the newline
 /// that separated them, which is exactly what the engine prints.
-fn fold_spell_run(run: Vec<(Vec<line::Part>, String)>) -> Option<AbilityDefinition> {
+fn fold_spell_run(run: Vec<(Vec<line::Part>, String, bool)>) -> Option<AbilityDefinition> {
     if run.is_empty() {
         return None;
     }
     let mut parts: Vec<line::Part> = Vec::new();
     let mut descriptions: Vec<String> = Vec::new();
+    let optional = run.first().map(|(_, _, may)| *may).unwrap_or(false);
 
-    for (n, (chain, desc)) in run.into_iter().enumerate() {
+    for (n, (chain, desc, _)) in run.into_iter().enumerate() {
         descriptions.push(desc);
-        for (k, (e, link, dur, scope)) in chain.into_iter().enumerate() {
+        for (k, (e, link, dur, scope, cond)) in chain.into_iter().enumerate() {
             let link = if n > 0 && k == 0 {
                 SubAbilityLink::SequentialSibling
             } else {
                 link
             };
-            parts.push((e, link, dur, scope));
+            parts.push((e, link, dur, scope, cond));
         }
     }
 
-    line::assemble(AbilityKind::Spell, None, parts, descriptions.join("\n"))
+    let mut a = line::assemble(AbilityKind::Spell, None, parts, descriptions.join("\n"))?;
+    a.optional = optional;
+    Some(a)
 }
 
 enum Lowered {
     Keywords(Vec<Keyword>),
     /// A spell line, left unassembled so consecutive ones can fold together.
-    SpellBody(Vec<line::Part>, String),
+    SpellBody(Vec<line::Part>, String, bool),
     /// A line that is the permanent's own continuous ability. CR 611.2: an
     /// effect with no printed end lasts as long as its source, so it is not
     /// something a spell does — it is something the permanent IS.
@@ -212,6 +215,28 @@ fn parse_line(l: &Line<'_>, src: &str) -> Result<Lowered, Decline> {
     // needing its own leading-label arm.
     if let Some((inner, tag)) = strip_ability_word(l, src) {
         let lowered = parse_line(&inner, src)?;
+        // The word is dropped from the TOKENS either way, but the engine keeps
+        // it in an ability's printed description and drops it from a trigger's.
+        // Measured and decisive: 477 keeps against 9 for abilities, 0 against
+        // 296 for triggers. Same word, two slots, opposite treatment.
+        let lowered = match lowered {
+            Lowered::Ability(mut a) => {
+                a.description = Some(l.description.clone());
+                Lowered::Ability(a)
+            }
+            Lowered::SpellBody(chain, _, may) => {
+                Lowered::SpellBody(chain, l.description.clone(), may)
+            }
+            Lowered::Statics(sa) => Lowered::Statics(
+                sa.into_iter()
+                    .map(|mut s| {
+                        s.description = Some(l.description.clone());
+                        s
+                    })
+                    .collect(),
+            ),
+            other => other,
+        };
         // A few of these labels are not pure flavour: they name a CLASS of
         // ability that other cards refer to ("activate a boast ability"), so
         // the engine keeps a tag even though it drops the word.
@@ -462,6 +487,7 @@ fn activated_line(l: &Line<'_>, src: &str, colon: usize) -> Result<AbilityDefini
     let parts = effect_chain(body, src)
         .ok_or_else(|| decline(l, "activated_effect", DeclineReason::UnknownVerb))?;
 
+    let optional = parts.optional;
     let mut a = line::assemble(
         AbilityKind::Activated,
         Some(cost),
@@ -469,6 +495,7 @@ fn activated_line(l: &Line<'_>, src: &str, colon: usize) -> Result<AbilityDefini
         l.description.clone(),
     )
     .ok_or_else(|| decline(l, "assemble", DeclineReason::UnknownLineShape))?;
+    a.optional = optional;
     // CR 606.3: a loyalty ability may be activated only when its controller
     // could cast a sorcery. The restriction is inherent to the cost, not
     // printed on the card, so it is derived rather than parsed.
@@ -639,12 +666,19 @@ fn spell_line(l: &Line<'_>, src: &str) -> Result<Lowered, Decline> {
         return Ok(Lowered::Statics(statics));
     }
 
-    Ok(Lowered::SpellBody(parts.effects, l.description.clone()))
+    Ok(Lowered::SpellBody(
+        parts.effects,
+        l.description.clone(),
+        parts.optional,
+    ))
 }
 
 struct Chain {
     effects: Vec<line::Part>,
     facts: effect::ClauseFacts,
+    /// CR 608.2d: the body opened with "You may", so its controller chooses
+    /// whether to perform it. Recorded on the ability, not on the effect.
+    optional: bool,
     /// One per sentence that lowered to a standalone continuous ability.
     statics: Vec<phase_oracle_ast::StaticAbility>,
     sentence_count: usize,
@@ -666,8 +700,19 @@ fn effect_chain_in(toks: &[Token], src: &str, in_trigger: bool) -> Option<Chain>
     let mut facts = effect::ClauseFacts::default();
     let mut statics = Vec::new();
     let mut sentence_count = 0usize;
+    let mut optional = false;
 
     for (n, sent) in line::sentences(toks).into_iter().enumerate() {
+        // CR 608.2d: "If you do, X" performs X only when the OPTIONAL effect
+        // before it actually happened. The clause is a gate on this sentence,
+        // not an instruction of its own, so it is lifted before parsing.
+        let (sent, sentence_condition) = line::strip_if_you_do(sent, src);
+        // "You may X" is a permission, also not an instruction. It is lifted
+        // the same way, and the flag it sets is what "if you do" later reads.
+        let (sent, may) = line::strip_you_may(sent, src);
+        if may && n == 0 {
+            optional = true;
+        }
         // CR 701.15b: "It can't be regenerated" is printed as its own sentence
         // but is a RIDER on the destruction before it, not an instruction of
         // its own. The engine records it as a field, so it is folded back here.
@@ -707,7 +752,10 @@ fn effect_chain_in(toks: &[Token], src: &str, in_trigger: bool) -> Option<Chain>
             let scope = (k == line::DURATION_OWNER)
                 .then_some(p.facts.player_scope)
                 .flatten();
-            effects.push((e, link, owned, scope));
+            // CR 608.2d: the gate applies to the FIRST effect of the sentence
+            // it introduces; anything chained after that runs alongside it.
+            let cond = (k == 0).then_some(sentence_condition).flatten();
+            effects.push((e, link, owned, scope, cond));
         }
     }
 
@@ -716,6 +764,7 @@ fn effect_chain_in(toks: &[Token], src: &str, in_trigger: bool) -> Option<Chain>
         facts,
         statics,
         sentence_count,
+        optional,
     })
 }
 
