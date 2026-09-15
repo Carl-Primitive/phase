@@ -88,14 +88,10 @@ fn main() {
         complete += 1;
 
         // A bucket the grammar never emits must also be empty on their side,
-        // otherwise "complete" would be claiming a card whose statics we dropped.
-        let untouched_buckets = [
-            "static_abilities",
-            "replacements",
-            "modal",
-            "additional_cost",
-        ];
-        let their_extra = untouched_buckets.iter().any(|k| card.get(*k).is_some());
+        // otherwise "complete" would be claiming a card whose replacements we
+        // silently dropped.
+        let untouched_buckets = ["replacements", "modal", "additional_cost"];
+        let their_extra = untouched_buckets.iter().find(|k| card.get(**k).is_some());
 
         // Keyword ORDER is compared as a multiset, not a sequence.
         //
@@ -125,8 +121,13 @@ fn main() {
         } else {
             mine(&p.out.triggers) == arr(card, "triggers")
         };
+        let st_ok = if p.out.static_abilities.is_empty() {
+            card.get("static_abilities").is_none()
+        } else {
+            mine(&p.out.static_abilities) == arr(card, "static_abilities")
+        };
 
-        if kw_ok && ab_ok && tr_ok && !their_extra {
+        if kw_ok && ab_ok && tr_ok && st_ok && their_extra.is_none() {
             exact += 1;
             continue;
         }
@@ -134,21 +135,39 @@ fn main() {
         // A card the OLD parser lowered to something, where the new parser
         // claims completeness but disagrees. This is the stop-the-line bucket.
         regressions += 1;
-        let bucket = if their_extra {
-            "dropped a bucket we do not emit"
+        let bucket = if let Some(b) = their_extra {
+            match *b {
+                "replacements" => "dropped: replacements",
+                "modal" => "dropped: modal",
+                _ => "dropped: additional_cost",
+            }
         } else if !kw_ok {
             "keywords differ"
         } else if !tr_ok {
             "triggers differ"
+        } else if !st_ok {
+            "static abilities differ"
         } else {
             "abilities differ"
         };
         *mismatch_bucket.entry(bucket).or_default() += 1;
 
+        if bucket.starts_with("dropped") && examples.len() < show {
+            examples.push(format!(
+                "--- {name} [{bucket}]\n    text:  {}",
+                text.replace('\n', " | ")
+            ));
+            continue;
+        }
         if examples.len() < show {
             let (k, m, t) = match bucket {
                 "keywords differ" => ("keywords", mine(&p.out.keywords), arr(card, "keywords")),
                 "triggers differ" => ("triggers", mine(&p.out.triggers), arr(card, "triggers")),
+                "static abilities differ" => (
+                    "statics",
+                    mine(&p.out.static_abilities),
+                    arr(card, "static_abilities"),
+                ),
                 _ => ("abilities", mine(&p.out.abilities), arr(card, "abilities")),
             };
             examples.push(format!(

@@ -61,6 +61,7 @@ pub fn parse_card(name: &str, oracle: &str) -> CardParse {
         match parse_line(&l, &src) {
             Ok(Lowered::Keywords(mut kws)) => out.keywords.append(&mut kws),
             Ok(Lowered::SpellBody(chain, desc)) => spell_run.push((chain, desc)),
+            Ok(Lowered::Statics(mut sa)) => out.static_abilities.append(&mut sa),
             Ok(Lowered::Ability(a)) => out.abilities.push(*a),
             Ok(Lowered::Trigger(t)) => out.triggers.push(*t),
             Err(d) => declines.push(d),
@@ -88,13 +89,13 @@ fn fold_spell_run(run: Vec<(Vec<line::Part>, String)>) -> Option<AbilityDefiniti
 
     for (n, (chain, desc)) in run.into_iter().enumerate() {
         descriptions.push(desc);
-        for (k, (e, link, dur)) in chain.into_iter().enumerate() {
+        for (k, (e, link, dur, scope)) in chain.into_iter().enumerate() {
             let link = if n > 0 && k == 0 {
                 SubAbilityLink::SequentialSibling
             } else {
                 link
             };
-            parts.push((e, link, dur));
+            parts.push((e, link, dur, scope));
         }
     }
 
@@ -105,6 +106,10 @@ enum Lowered {
     Keywords(Vec<String>),
     /// A spell line, left unassembled so consecutive ones can fold together.
     SpellBody(Vec<line::Part>, String),
+    /// A line that is the permanent's own continuous ability. CR 611.2: an
+    /// effect with no printed end lasts as long as its source, so it is not
+    /// something a spell does — it is something the permanent IS.
+    Statics(Vec<phase_oracle_ast::StaticAbility>),
     Ability(Box<AbilityDefinition>),
     Trigger(Box<TriggerDefinition>),
 }
@@ -282,12 +287,32 @@ fn trigger_zones(td: &TriggerDefinition) -> Vec<phase_oracle_ast::ZoneName> {
 fn spell_line(l: &Line<'_>, src: &str) -> Result<Lowered, Decline> {
     let parts = effect_chain(l.toks, src)
         .ok_or_else(|| decline(l, "spell_effect", DeclineReason::UnknownVerb))?;
+
+    // A line whose every sentence is a continuous effect with no printed end is
+    // the permanent's own static ability, not an instruction a spell carries
+    // out. The engine files those in their own bucket, and the whole printed
+    // line is their description.
+    if !parts.statics.is_empty() && parts.statics.len() == parts.sentence_count {
+        let statics = parts
+            .statics
+            .into_iter()
+            .map(|mut sa| {
+                sa.description = Some(l.description.clone());
+                sa
+            })
+            .collect();
+        return Ok(Lowered::Statics(statics));
+    }
+
     Ok(Lowered::SpellBody(parts.effects, l.description.clone()))
 }
 
 struct Chain {
     effects: Vec<line::Part>,
     facts: effect::ClauseFacts,
+    /// One per sentence that lowered to a standalone continuous ability.
+    statics: Vec<phase_oracle_ast::StaticAbility>,
+    sentence_count: usize,
 }
 
 /// Lower a run of tokens into a linked chain of effects.
@@ -299,10 +324,16 @@ struct Chain {
 fn effect_chain(toks: &[Token], src: &str) -> Option<Chain> {
     let mut effects: Vec<line::Part> = Vec::new();
     let mut facts = effect::ClauseFacts::default();
+    let mut statics = Vec::new();
+    let mut sentence_count = 0usize;
 
     for (n, sent) in line::sentences(toks).into_iter().enumerate() {
         let p = line::sentence_effects(sent, src)?;
+        sentence_count += 1;
         facts = facts.merge(p.facts);
+        if let Some(sa) = p.standalone {
+            statics.push(sa);
+        }
         let dur = p.duration;
         for (k, e) in p.effects.into_iter().enumerate() {
             // The first effect of a later SENTENCE is a sibling; everything
@@ -313,11 +344,19 @@ fn effect_chain(toks: &[Token], src: &str) -> Option<Chain> {
                 SubAbilityLink::ContinuationStep
             };
             let owned = (k == line::DURATION_OWNER).then_some(dur.clone()).flatten();
-            effects.push((e, link, owned));
+            let scope = (k == line::DURATION_OWNER)
+                .then_some(p.facts.player_scope)
+                .flatten();
+            effects.push((e, link, owned, scope));
         }
     }
 
-    (!effects.is_empty()).then_some(Chain { effects, facts })
+    (!effects.is_empty()).then_some(Chain {
+        effects,
+        facts,
+        statics,
+        sentence_count,
+    })
 }
 
 /// Re-exported so a caller can talk about costs without depending on the AST

@@ -24,7 +24,7 @@ pub mod static_ability;
 pub mod trigger;
 
 pub use ability::{
-    AbilityDefinition, AbilityKind, ActivationRestriction, Duration, SubAbilityLink,
+    AbilityDefinition, AbilityKind, ActivationRestriction, Duration, PlayerScope, SubAbilityLink,
 };
 pub use cost::{AbilityCost, ManaCost, ManaShard, SacrificeCost};
 pub use effect::{ChoiceTiming, CounterType, Effect, TapScope, TapState, ZoneName};

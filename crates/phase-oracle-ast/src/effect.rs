@@ -113,6 +113,13 @@ pub enum Effect {
         amount: Quantity,
         target: TargetFilter,
     },
+    /// Damage dealt to a class of PLAYERS. Distinct from `DamageAll`, which
+    /// ranges over objects: CR 102.1 makes a player not an object, so the two
+    /// cannot share a target slot.
+    DamageEachPlayer {
+        amount: Quantity,
+        player_filter: crate::ability::PlayerScope,
+    },
     /// CR 121.
     Draw {
         count: Quantity,

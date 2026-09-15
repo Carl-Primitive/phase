@@ -78,8 +78,23 @@ pub struct AbilityDefinition {
     /// CR 608.2d: "You may …".
     pub optional: bool,
     pub forward_result: bool,
+    /// CR 101.4: when set, the effect is performed once per matching player,
+    /// each becoming the acting player in APNAP order. "Each opponent mills a
+    /// card" is a controller-shaped `Mill` iterated over opponents, NOT a
+    /// mill whose target is the opponents.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub player_scope: Option<PlayerScope>,
     #[serde(skip_serializing_if = "SubAbilityLink::is_continuation")]
     pub sub_link: SubAbilityLink,
+}
+
+/// Which players an iterated effect runs for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum PlayerScope {
+    Opponent,
+    All,
+    TriggeringPlayer,
 }
 
 impl AbilityDefinition {
@@ -100,6 +115,7 @@ impl AbilityDefinition {
             optional_targeting: false,
             optional: false,
             forward_result: false,
+            player_scope: None,
             sub_link: SubAbilityLink::ContinuationStep,
         }
     }

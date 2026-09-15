@@ -6,8 +6,8 @@
 //! [`scoped`] is the ONE place that translation happens.
 
 use phase_oracle_ast::{
-    ChoiceTiming, Duration, Effect, Modification, Quantity, StaticAbility, TapScope, TapState,
-    TargetFilter, ZoneName,
+    ChoiceTiming, ControllerRef, Duration, Effect, Modification, PlayerScope, Quantity,
+    StaticAbility, TapScope, TapState, TargetFilter, ZoneName,
 };
 
 use crate::prim::{any_of, fail, phrase, phrase_alt, quantity, word, In, R};
@@ -24,6 +24,10 @@ use crate::target::{subject, Scope, Subject};
 pub struct ClauseFacts {
     pub targeted_player: bool,
     pub targeted_object: bool,
+    /// CR 101.4: the clause's subject was a CLASS of players, so the effect is
+    /// iterated once per player rather than aimed at them. "Each opponent mills
+    /// a card" is a controller-shaped mill run for each opponent.
+    pub player_scope: Option<PlayerScope>,
 }
 
 impl ClauseFacts {
@@ -36,6 +40,15 @@ impl ClauseFacts {
         Self {
             targeted_player: s.targeted && player_shaped,
             targeted_object: s.targeted && !player_shaped,
+            player_scope: None,
+        }
+    }
+
+    /// Facts for a clause whose SUBJECT is a class of players.
+    fn iterated(s: &Subject) -> Self {
+        Self {
+            player_scope: player_scope_of(s),
+            ..Self::of(s)
         }
     }
 
@@ -43,7 +56,29 @@ impl ClauseFacts {
         Self {
             targeted_player: self.targeted_player || other.targeted_player,
             targeted_object: self.targeted_object || other.targeted_object,
+            player_scope: self.player_scope.or(other.player_scope),
         }
+    }
+}
+
+/// The player class a mass subject names, if it names one.
+///
+/// CR 102.1: a player is not an object, so a player-shaped filter with `All`
+/// scope is an ITERATION, not a mass target.
+fn player_scope_of(s: &Subject) -> Option<PlayerScope> {
+    if s.scope != Scope::All || s.targeted {
+        return None;
+    }
+    let TargetFilter::Typed(t) = &s.filter else {
+        return None;
+    };
+    if !t.type_filters.is_empty() {
+        return None;
+    }
+    match t.controller? {
+        ControllerRef::Opponent => Some(PlayerScope::Opponent),
+        ControllerRef::EachPlayer => Some(PlayerScope::All),
+        _ => None,
     }
 }
 
@@ -73,6 +108,19 @@ fn implicit_controller(f: &TargetFilter) -> Option<TargetFilter> {
     match f {
         TargetFilter::Controller => None,
         other => Some(other.clone()),
+    }
+}
+
+/// The subject an ITERATED clause writes its effect against.
+///
+/// An iterated effect is performed by each player in turn, so its own player
+/// slot names the acting player — which the engine spells as the controller,
+/// with `player_scope` saying who that is on each pass.
+fn acting_subject(s: &Subject) -> Subject {
+    if player_scope_of(s).is_some() {
+        Subject::single(TargetFilter::Controller)
+    } else {
+        s.clone()
     }
 }
 
@@ -647,8 +695,12 @@ pub fn keyword_word(i: In<'_>) -> R<'_, (String, String)> {
 /// gains flying" is one clause rather than a decline — and, because both
 /// predicates are continuous, it lowers to ONE static ability the way the
 /// engine prints it.
-pub fn subject_clause(i: In<'_>) -> R<'_, (Vec<Effect>, ClauseFacts, Option<Duration>)> {
-    let (r, s) = subject(i)?;
+pub fn subject_clause(i: In<'_>) -> R<'_, ClauseParse> {
+    let (r, printed_subject) = subject(i)?;
+    // CR 101.4: "each opponent mills a card" is a CONTROLLER-shaped mill run
+    // once per opponent, not a mill aimed at opponents. The acting subject is
+    // what the effect is written against; `player_scope` says who acts.
+    let s = acting_subject(&printed_subject);
     let (mut rest, first) = predicate(&s, r)?;
     let mut preds = vec![first];
 
@@ -689,8 +741,18 @@ pub fn subject_clause(i: In<'_>) -> R<'_, (Vec<Effect>, ClauseFacts, Option<Dura
         None => (rest, None),
     };
 
-    let (effects, facts) = lower_predicates(&s, preds, dur.clone(), &printed);
-    Ok((rest, (effects, facts, dur)))
+    let (effects, standalone, facts) =
+        lower_predicates(&s, preds, dur.clone(), &printed, &printed_subject);
+    let facts = facts.merge(ClauseFacts::iterated(&printed_subject));
+    Ok((
+        rest,
+        ClauseParse {
+            effects,
+            standalone,
+            facts,
+            duration: dur,
+        },
+    ))
 }
 
 /// Turn a run of predicates into engine effects.
@@ -700,12 +762,26 @@ pub fn subject_clause(i: In<'_>) -> R<'_, (Vec<Effect>, ClauseFacts, Option<Dura
 /// changes becomes `Pump`/`PumpAll`; anything else keeps its own effect. That
 /// is the engine's own division and it is why "gains flying" and "gets +1/+1"
 /// do not lower the same way despite reading alike.
+/// What one subject-initial clause lowered to.
+pub struct ClauseParse {
+    pub effects: Vec<Effect>,
+    /// Set when the clause is a CONTINUOUS effect with no printed end — an
+    /// ability of the permanent itself rather than something a spell does.
+    /// CR 611.2: such an effect lasts as long as its source, which is exactly
+    /// what a static ability is, so the engine files it under
+    /// `static_abilities` instead of wrapping it in a resolving effect.
+    pub standalone: Option<StaticAbility>,
+    pub facts: ClauseFacts,
+    pub duration: Option<Duration>,
+}
+
 fn lower_predicates(
     s: &Subject,
     preds: Vec<Predicate>,
     duration: Option<Duration>,
     printed: &str,
-) -> (Vec<Effect>, ClauseFacts) {
+    printed_subject: &Subject,
+) -> (Vec<Effect>, Option<StaticAbility>, ClauseFacts) {
     let mut mods: Vec<Modification> = Vec::new();
     let mut instants: Vec<Effect> = Vec::new();
     let mut facts = ClauseFacts::default();
@@ -732,6 +808,16 @@ fn lower_predicates(
             (Some(s.filter.clone()), TargetFilter::ParentTarget)
         } else {
             (None, s.filter.clone())
+        };
+
+        // A continuous change with no printed end, on an object the text did
+        // not target, is the permanent's own static ability.
+        let standalone = if duration.is_none() && !printed_subject.targeted {
+            let mut sa = StaticAbility::continuous(affected.clone(), mods.clone());
+            sa.description = None;
+            Some(sa)
+        } else {
+            None
         };
 
         let effect = if has_keyword {
@@ -772,12 +858,16 @@ fn lower_predicates(
                 },
             )
         };
+        // A standalone static only stands alone when the clause said nothing
+        // else: "creatures you control get +1/+1" is one, "target player draws
+        // a card and creatures get +1/+1" is not.
+        let standalone = standalone.filter(|_| instants.is_empty());
         let mut out = vec![effect];
         out.append(&mut instants);
-        return (out, facts);
+        return (out, standalone, facts);
     }
 
-    (instants, facts)
+    (instants, None, facts)
 }
 
 /// Put a predicate's LEADING verb into the infinitive, as the engine prints it

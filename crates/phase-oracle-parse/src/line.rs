@@ -6,7 +6,8 @@
 //! written order (CR 608.2c).
 
 use phase_oracle_ast::{
-    AbilityCost, AbilityDefinition, AbilityKind, Duration, Effect, SubAbilityLink,
+    AbilityCost, AbilityDefinition, AbilityKind, Duration, Effect, PlayerScope, StaticAbility,
+    SubAbilityLink,
 };
 use phase_oracle_lex::{Token, TokenKind};
 
@@ -160,6 +161,10 @@ pub struct SentenceParse {
     pub effects: Vec<Effect>,
     pub duration: Option<Duration>,
     pub facts: ClauseFacts,
+    /// Present when the sentence is a continuous effect with no printed end,
+    /// which in spell position is the permanent's own static ability rather
+    /// than something a resolving spell does.
+    pub standalone: Option<StaticAbility>,
 }
 
 /// Which effect in a sentence the sentence's duration belongs to.
@@ -175,7 +180,7 @@ pub const DURATION_OWNER: usize = 0;
 /// carries one produces two linked definitions rather than declining.
 pub fn sentence_effects(toks: &[Token], src: &str) -> Option<SentenceParse> {
     let stream = Tokens::new(toks, src);
-    let (rest, effects, facts, inner_dur) = parse_effect_chain(stream)?;
+    let (rest, effects, facts, inner_dur, standalone) = parse_effect_chain(stream)?;
     // A duration already consumed by a subject clause governs the whole
     // sentence; a trailing one applies to an imperative that had none.
     let (rest, dur) = match (inner_dur, duration(rest)) {
@@ -190,12 +195,21 @@ pub fn sentence_effects(toks: &[Token], src: &str) -> Option<SentenceParse> {
         effects,
         duration: dur,
         facts,
+        standalone,
     })
 }
 
 /// `<clause> [(, then | and | ,) <clause>]*`
-fn parse_effect_chain(i: In<'_>) -> Option<(In<'_>, Vec<Effect>, ClauseFacts, Option<Duration>)> {
-    let (mut rest, mut chain, mut facts, mut dur) = one_clause(i)?;
+type ChainOut<'a> = (
+    In<'a>,
+    Vec<Effect>,
+    ClauseFacts,
+    Option<Duration>,
+    Option<StaticAbility>,
+);
+
+fn parse_effect_chain(i: In<'_>) -> Option<ChainOut<'_>> {
+    let (mut rest, mut chain, mut facts, mut dur, standalone) = one_clause(i)?;
     loop {
         // A continuation is marked by "then", with or without a leading comma.
         let after_comma = match rest.first() {
@@ -206,7 +220,7 @@ fn parse_effect_chain(i: In<'_>) -> Option<(In<'_>, Vec<Effect>, ClauseFacts, Op
             break;
         };
         match one_clause(after_then) {
-            Some((r, mut more, f, d)) => {
+            Some((r, mut more, f, d, _)) => {
                 chain.append(&mut more);
                 facts = facts.merge(f);
                 if dur.is_none() {
@@ -217,16 +231,24 @@ fn parse_effect_chain(i: In<'_>) -> Option<(In<'_>, Vec<Effect>, ClauseFacts, Op
             None => break,
         }
     }
-    Some((rest, chain, facts, dur))
+    Some((rest, chain, facts, dur, standalone))
 }
 
 /// One clause, imperative or subject-initial.
-fn one_clause(i: In<'_>) -> Option<(In<'_>, Vec<Effect>, ClauseFacts, Option<Duration>)> {
+type ClauseOut<'a> = (
+    In<'a>,
+    Vec<Effect>,
+    ClauseFacts,
+    Option<Duration>,
+    Option<StaticAbility>,
+);
+
+fn one_clause(i: In<'_>) -> Option<ClauseOut<'_>> {
     if let Ok((r, (e, f))) = crate::effect::imperative(i) {
-        return Some((r, vec![e], f, None));
+        return Some((r, vec![e], f, None, None));
     }
-    if let Ok((r, (es, f, d))) = crate::effect::subject_clause(i) {
-        return Some((r, es, f, d));
+    if let Ok((r, c)) = crate::effect::subject_clause(i) {
+        return Some((r, c.effects, c.facts, c.duration, c.standalone));
     }
     None
 }
@@ -237,7 +259,12 @@ fn one_clause(i: In<'_>) -> Option<(In<'_>, Vec<Effect>, ClauseFacts, Option<Dur
 /// Duration is PER PART, not per ability: "Target creature gets -3/-0 until end
 /// of turn.\nTarget creature gets -0/-3 until end of turn." prints one on each
 /// sentence, and the engine records both.
-pub type Part = (Effect, SubAbilityLink, Option<Duration>);
+pub type Part = (
+    Effect,
+    SubAbilityLink,
+    Option<Duration>,
+    Option<PlayerScope>,
+);
 
 /// Assemble a chain of parts into one definition.
 ///
@@ -250,16 +277,18 @@ pub fn assemble(
     description: String,
 ) -> Option<AbilityDefinition> {
     let mut it = parts.into_iter();
-    let (first, _, first_dur) = it.next()?;
+    let (first, _, first_dur, first_scope) = it.next()?;
     let mut root = AbilityDefinition::new(kind, first);
     root.cost = cost;
     root.duration = first_dur;
+    root.player_scope = first_scope;
     root.description = Some(description);
 
-    for (e, link, dur) in it {
+    for (e, link, dur, scope) in it {
         let mut next = AbilityDefinition::spell(e);
         next.sub_link = link;
         next.duration = dur;
+        next.player_scope = scope;
         root.chain(next);
     }
     Some(root)

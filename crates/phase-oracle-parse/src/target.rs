@@ -58,11 +58,17 @@ fn core_type(w: &str) -> Option<TypeFilter> {
     })
 }
 
-/// A "non-" prefixed type word: CR 205.2a.
-fn non_type(w: &str) -> Option<TypeFilter> {
+/// The body of a "non-" prefixed word: "nonland" and "non-Human" both yield
+/// their tail. CR 205.2a.
+fn non_body(w: &str) -> Option<&str> {
     let rest = w.strip_prefix("non")?;
     let rest = rest.strip_prefix('-').unwrap_or(rest);
-    core_type(rest).map(|t| TypeFilter::Non(Box::new(t)))
+    (!rest.is_empty()).then_some(rest)
+}
+
+/// A "non-" prefixed type word: "noncreature", "nonland".
+fn non_type(w: &str) -> Option<TypeFilter> {
+    core_type(non_body(w)?).map(|t| TypeFilter::Non(Box::new(t)))
 }
 
 fn color(w: &str) -> Option<ManaColor> {
@@ -78,11 +84,19 @@ fn color(w: &str) -> Option<ManaColor> {
 
 /// A "non-" prefixed colour word: "nonblack", "non-red".
 fn non_color(w: &str) -> Option<ManaColor> {
-    let rest = w.strip_prefix("non")?;
-    color(rest.strip_prefix('-').unwrap_or(rest))
+    color(non_body(w)?)
 }
 
 const SUPERTYPES: &[&str] = &["basic", "legendary", "snow", "world"];
+
+/// A printed word in the engine's capitalized spelling.
+fn capitalized(w: &str) -> String {
+    let mut c = w.chars();
+    match c.next() {
+        Some(f) => format!("{}{}", f.to_uppercase(), c.as_str()),
+        None => String::new(),
+    }
+}
 
 /// An adjective that restricts without naming a type.
 fn state_prop(w: &str) -> Option<FilterProp> {
@@ -159,26 +173,38 @@ fn typed_filter(i: In<'_>) -> R<'_, TypedFilter> {
     // part, so adding an axis never adds a branch here.
     loop {
         let Some(w) = i.first_word() else { break };
-        if w == "another" {
-            f.properties.push(FilterProp::Another);
-        } else if let Some(c) = color(&w) {
+        if let Some(c) = color(&w) {
             f.properties.push(FilterProp::HasColor { color: c });
         } else if let Some(c) = non_color(&w) {
             f.properties.push(FilterProp::NotColor { color: c });
         } else if let Some(p) = state_prop(&w) {
             f.properties.push(p);
         } else if SUPERTYPES.contains(&w.as_str()) {
-            let mut c = w.chars();
-            let cap = c
-                .next()
-                .map(|x| x.to_uppercase().to_string())
-                .unwrap_or_default();
             f.properties.push(FilterProp::HasSupertype {
-                value: format!("{cap}{}", c.as_str()),
+                value: capitalized(&w),
+            });
+        } else if non_body(&w).is_some_and(|b| SUPERTYPES.contains(&b)) {
+            // "nonlegendary creature" — CR 205.4: a supertype is not a type, so
+            // its negation is a property rather than a type-line conjunct.
+            let body = non_body(&w).expect("checked");
+            f.properties.push(FilterProp::NotSupertype {
+                value: capitalized(body),
             });
         } else if let Some(t) = non_type(&w) {
             // "nonland permanent" — a negated type is a conjunct, not an adjective.
             f.type_filters.push(t);
+        } else if non_body(&w).is_some()
+            && i.take_from_n(1)
+                .first_word()
+                .is_some_and(|n| core_type(&n).is_some())
+        {
+            // "non-Human creature" — a negated SUBTYPE, recognized by position:
+            // the next word is the core type, so this one names a subtype.
+            let body = non_body(&w).expect("checked");
+            f.type_filters
+                .push(TypeFilter::Non(Box::new(TypeFilter::Subtype(capitalized(
+                    body,
+                )))));
         } else {
             break;
         }
@@ -190,13 +216,7 @@ fn typed_filter(i: In<'_>) -> R<'_, TypedFilter> {
         if core_type(&w).is_none() {
             let next = i.take_from_n(1);
             if next.first_word().is_some_and(|n| core_type(&n).is_some()) {
-                let mut c = w.chars();
-                let cap = c
-                    .next()
-                    .map(|x| x.to_uppercase().to_string())
-                    .unwrap_or_default();
-                f.type_filters
-                    .push(TypeFilter::Subtype(format!("{cap}{}", c.as_str())));
+                f.type_filters.push(TypeFilter::Subtype(capitalized(&w)));
                 i = next;
             }
         }
@@ -250,6 +270,15 @@ fn typed_filter(i: In<'_>) -> R<'_, TypedFilter> {
 /// engine's shape. Composed by iteration rather than by enumerating list
 /// lengths, so a four-way list costs nothing extra.
 fn typed_filter_list(i: In<'_>) -> R<'_, TargetFilter> {
+    // CR 109.5: "another" is printed ONCE before the whole list and excludes the
+    // source from every alternative — "sacrifice another creature or artifact"
+    // means another of either. Stripping it here rather than inside
+    // `typed_filter` is what makes the distribution automatic.
+    let (i, another) = match word("another")(i) {
+        Ok((r, _)) => (r, true),
+        Err(_) => (i, false),
+    };
+
     let (mut rest, first) = typed_filter(i)?;
     let mut parts = vec![TargetFilter::Typed(first)];
 
@@ -273,10 +302,15 @@ fn typed_filter_list(i: In<'_>) -> R<'_, TargetFilter> {
         }
     }
 
-    if parts.len() == 1 {
-        return Ok((rest, parts.pop().expect("one element")));
+    let mut out = if parts.len() == 1 {
+        parts.pop().expect("one element")
+    } else {
+        TargetFilter::Or { filters: parts }
+    };
+    if another {
+        add_prop(&mut out, FilterProp::Another);
     }
-    Ok((rest, TargetFilter::Or { filters: parts }))
+    Ok((rest, out))
 }
 
 /// A player reference that is not an object. CR 102.1.
@@ -303,58 +337,35 @@ fn player_target(i: In<'_>) -> R<'_, Subject> {
         ));
     }
     // "an opponent" / "a player" — a player named without being targeted.
-    if let Ok((r, _)) = phrase_alt(&[
-        ("an opponent", ControllerRef::Opponent),
-        ("a player", ControllerRef::EachPlayer),
-    ])(i)
-    {
-        let ctrl = if phrase("an opponent")(i).is_ok() {
-            ControllerRef::Opponent
-        } else {
-            ControllerRef::EachPlayer
-        };
-        let _ = r;
-        let (r, _) = phrase_alt(&[("an opponent", ()), ("a player", ())])(i)?;
+    if let Ok((r, _)) = phrase("an opponent")(i) {
+        let f = TargetFilter::Typed(TypedFilter::player(ControllerRef::Opponent));
+        return Ok((r, Subject::single(f)));
+    }
+    // An unrestricted player carries no controller constraint at all, so the
+    // engine spells it `Player` rather than an empty typed filter.
+    if let Ok((r, _)) = phrase("a player")(i) {
+        return Ok((r, Subject::single(TargetFilter::Player)));
+    }
+
+    // "each opponent" / "each other player" / "each player" — a class of
+    // players, which is a SCOPE rather than a target (CR 102.1 + CR 101.4).
+    const PLAYER_CLASSES: &[(&str, ControllerRef)] = &[
+        ("each opponent", ControllerRef::Opponent),
+        ("each other player", ControllerRef::Opponent),
+        ("each player", ControllerRef::EachPlayer),
+    ];
+    if let Ok((r, ctrl)) = phrase_alt(PLAYER_CLASSES)(i) {
+        let f = TargetFilter::Typed(TypedFilter::player(ctrl));
         return Ok((
             r,
-            Subject::single(TargetFilter::Typed(TypedFilter::player(ctrl))),
+            Subject {
+                filter: f,
+                scope: Scope::All,
+                targeted: false,
+            },
         ));
     }
 
-    // "each opponent" / "each other player" — a class of players, not a target.
-    if let Ok((r, _)) = phrase("each opponent")(i) {
-        let f = TargetFilter::Typed(TypedFilter::player(ControllerRef::Opponent));
-        return Ok((
-            r,
-            Subject {
-                filter: f,
-                scope: Scope::All,
-                targeted: false,
-            },
-        ));
-    }
-    if let Ok((r, _)) = phrase("each other player")(i) {
-        let f = TargetFilter::Typed(TypedFilter::player(ControllerRef::Opponent));
-        return Ok((
-            r,
-            Subject {
-                filter: f,
-                scope: Scope::All,
-                targeted: false,
-            },
-        ));
-    }
-    if let Ok((r, _)) = phrase("each player")(i) {
-        let f = TargetFilter::Typed(TypedFilter::player(ControllerRef::EachPlayer));
-        return Ok((
-            r,
-            Subject {
-                filter: f,
-                scope: Scope::All,
-                targeted: false,
-            },
-        ));
-    }
     // CR 603.2: "that player" names the player the trigger's event was about,
     // which is a back-reference and not a new choice.
     if let Ok((r, _)) = phrase("that player")(i) {
@@ -385,18 +396,42 @@ pub fn subject(i: In<'_>) -> R<'_, Subject> {
     if let Ok((r, _)) = self_ref(i) {
         return Ok((r, Subject::single(TargetFilter::SelfRef)));
     }
-    if let Ok((r, _)) = phrase_alt(&[
-        ("enchanted creature", ()),
-        ("enchanted permanent", ()),
-        ("equipped creature", ()),
-    ])(i)
-    {
-        return Ok((r, Subject::single(TargetFilter::AttachedTo)));
+
+    // "enchanted creature" / "equipped creature" — the engine spells the host
+    // as a typed filter carrying an attachment property, NOT as `AttachedTo`.
+    // Reading it as a filter is what lets an Aura's static ability name the
+    // same object shape every other filter uses.
+    const ATTACHED: &[(&str, FilterProp)] = &[
+        ("enchanted creature", FilterProp::EnchantedBy),
+        ("enchanted permanent", FilterProp::EnchantedBy),
+        ("enchanted artifact", FilterProp::EnchantedBy),
+        ("enchanted land", FilterProp::EnchantedBy),
+        ("equipped creature", FilterProp::EquippedBy),
+    ];
+    for (p, prop) in ATTACHED {
+        if let Ok((r, _)) = crate::prim::phrase_static(p)(i) {
+            let noun = p.rsplit(' ').next().expect("two words");
+            let mut t = TypedFilter::of(core_type(noun).expect("known type"));
+            t.properties.push(prop.clone());
+            return Ok((r, Subject::single(TargetFilter::Typed(t))));
+        }
     }
 
     // "target <object>" — chosen on announcement (CR 601.2c).
+    //
+    // "another" is printed BEFORE "target" ("return another target creature you
+    // control"), so it is stripped here and re-attached to the filter. Leaving
+    // it to the noun grammar would make "target" itself look like a subtype,
+    // because the word after it is the core type.
+    let (i, another) = match word("another")(i) {
+        Ok((r, _)) if word("target")(r).is_ok() => (r, true),
+        _ => (i, false),
+    };
     if let Ok((r, _)) = word("target")(i) {
-        let (r, f) = typed_filter_list(r)?;
+        let (r, mut f) = typed_filter_list(r)?;
+        if another {
+            add_prop(&mut f, FilterProp::Another);
+        }
         return Ok((
             r,
             Subject {
@@ -449,6 +484,24 @@ pub fn subject(i: In<'_>) -> R<'_, Subject> {
     }
 
     fail(i)
+}
+
+/// Attach a property to every branch of a filter.
+///
+/// A disjunction distributes the property over its alternatives, because
+/// "another target artifact or creature" means another of either.
+fn add_prop(f: &mut TargetFilter, p: FilterProp) {
+    match f {
+        // Appended, not prepended: the engine prints `Another` after the
+        // adjectives it shares a noun phrase with ("nontoken", "attacking").
+        TargetFilter::Typed(t) => t.properties.push(p),
+        TargetFilter::Or { filters } => {
+            for inner in filters {
+                add_prop(inner, p.clone());
+            }
+        }
+        _ => {}
+    }
 }
 
 /// Whether the noun phrase starting here is printed in the plural.
