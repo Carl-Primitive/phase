@@ -116,7 +116,7 @@ fn main() {
         // A bucket the grammar never emits must also be empty on their side,
         // otherwise "complete" would be claiming a card whose replacements we
         // silently dropped.
-        let untouched_buckets = ["replacements", "modal", "additional_cost"];
+        let untouched_buckets = ["replacements", "additional_cost"];
         let their_extra = untouched_buckets.iter().find(|k| card.get(**k).is_some());
 
         // Keyword ORDER is compared as a multiset, not a sequence.
@@ -152,8 +152,12 @@ fn main() {
         } else {
             mine(&p.out.static_abilities) == arr(card, "static_abilities")
         };
+        let modal_ok = match &p.out.modal {
+            None => card.get("modal").is_none(),
+            Some(m) => mine(m) == arr(card, "modal"),
+        };
 
-        if kw_ok && ab_ok && tr_ok && st_ok && their_extra.is_none() {
+        if kw_ok && ab_ok && tr_ok && st_ok && modal_ok && their_extra.is_none() {
             exact += 1;
             continue;
         }
@@ -189,7 +193,6 @@ fn main() {
         } else if let Some(b) = their_extra {
             match *b {
                 "replacements" => "dropped: replacements",
-                "modal" => "dropped: modal",
                 _ => "dropped: additional_cost",
             }
         } else if !kw_ok {
@@ -198,6 +201,8 @@ fn main() {
             "triggers differ"
         } else if !st_ok {
             "static abilities differ"
+        } else if !modal_ok {
+            "modal differs"
         } else {
             "abilities differ"
         };
@@ -222,6 +227,7 @@ fn main() {
                     mine(&p.out.static_abilities),
                     arr(card, "static_abilities"),
                 ),
+                "modal differs" => ("modal", mine(&p.out.modal), arr(card, "modal")),
                 _ => ("abilities", mine(&p.out.abilities), arr(card, "abilities")),
             };
             examples.push(format!(

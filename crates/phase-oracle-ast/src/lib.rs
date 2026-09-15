@@ -70,6 +70,24 @@ pub enum Keyword {
     },
 }
 
+/// CR 700.2: metadata for a modal spell or ability.
+///
+/// The modes themselves are ordinary abilities, one per bullet, living in the
+/// card's `abilities` array. This struct only records how many of them the
+/// controller picks — which is why `mode_count` and the array length must
+/// agree, and why each mode's own `description` is null while their printed
+/// text is repeated here.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ModalChoice {
+    pub min_choices: usize,
+    pub max_choices: usize,
+    pub mode_count: usize,
+    pub mode_descriptions: Vec<String>,
+    pub allow_repeat_modes: bool,
+    /// CR 700.2a: the controller, for every modal this grammar produces.
+    pub chooser: TargetFilter,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
 pub struct CardOutput {
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -80,6 +98,8 @@ pub struct CardOutput {
     pub triggers: Vec<TriggerDefinition>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub static_abilities: Vec<static_ability::StaticAbility>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub modal: Option<ModalChoice>,
 }
 
 impl CardOutput {
@@ -88,5 +108,6 @@ impl CardOutput {
             && self.abilities.is_empty()
             && self.triggers.is_empty()
             && self.static_abilities.is_empty()
+            && self.modal.is_none()
     }
 }

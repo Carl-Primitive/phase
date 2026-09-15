@@ -1553,3 +1553,78 @@ fn a_tagged_ability_word_keeps_its_tag_but_loses_its_word() {
         "Whenever you cast a spell, draw a card."
     );
 }
+
+// ---------------------------------------------------------------------------
+// Modal spells
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_modal_spell_records_its_counts_and_lowers_each_mode_to_an_ability() {
+    // CR 700.2. The modes are ordinary abilities — the modal block only says
+    // how many of them get chosen, which is why each mode's own `description`
+    // is null while their printed text is repeated in `mode_descriptions`.
+    let v = parsed(
+        "Cryptic Command",
+        "Choose two —\n• Counter target spell.\n• Draw a card.\n• Tap all creatures your opponents control.",
+    );
+    assert_eq!(
+        v["modal"],
+        json!({
+            "min_choices": 2,
+            "max_choices": 2,
+            "mode_count": 3,
+            "mode_descriptions": [
+                "Counter target spell.",
+                "Draw a card.",
+                "Tap all creatures your opponents control."
+            ],
+            "allow_repeat_modes": false,
+            "chooser": {"type": "Controller"}
+        })
+    );
+    assert_eq!(v["abilities"].as_array().expect("array").len(), 3);
+    assert_eq!(v["abilities"][0]["effect"]["type"], "Counter");
+    assert_eq!(v["abilities"][0]["description"], json!(null));
+}
+
+#[test]
+fn choose_one_or_more_caps_at_the_number_of_modes_printed() {
+    let v = parsed(
+        "Whatever",
+        "Choose one or more —\n• Draw a card.\n• You gain 2 life.",
+    );
+    assert_eq!(v["modal"]["min_choices"], 1);
+    assert_eq!(v["modal"]["max_choices"], 2);
+    assert_eq!(v["modal"]["mode_count"], 2);
+}
+
+#[test]
+fn choose_one_or_both_is_not_choose_one() {
+    let one = parsed(
+        "Whatever",
+        "Choose one —\n• Draw a card.\n• You gain 2 life.",
+    );
+    assert_eq!(one["modal"]["max_choices"], 1);
+
+    let both = parsed(
+        "Whatever",
+        "Choose one or both —\n• Draw a card.\n• You gain 2 life.",
+    );
+    assert_eq!(both["modal"]["max_choices"], 2);
+}
+
+#[test]
+fn an_instruction_that_merely_starts_with_choose_is_not_a_modal_header() {
+    // The em dash is what makes it a header. Without one this is an ordinary
+    // instruction, and the grammar has no production for it yet.
+    let p = parse_card("Whatever", "Choose a creature type.");
+    assert!(p.out.modal.is_none());
+    assert!(!p.is_complete());
+}
+
+#[test]
+fn a_bullet_with_no_header_declines_rather_than_floating_free() {
+    let p = parse_card("Whatever", "• Draw a card.");
+    assert!(!p.is_complete());
+    assert!(p.out.abilities.is_empty());
+}

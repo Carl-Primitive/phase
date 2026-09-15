@@ -70,7 +70,46 @@ pub fn parse_card(name: &str, oracle: &str) -> CardParse {
     // order). Keyword, activated and triggered lines each stand alone.
     let mut spell_run: Vec<(Vec<line::Part>, String)> = Vec::new();
 
+    // CR 700.2: a modal header governs the bullet lines that FOLLOW it, so the
+    // header's counts are held until the modes have been collected.
+    let mut modal: Option<(usize, usize)> = None;
+    let mut modes: Vec<String> = Vec::new();
+
     for l in line::lines(&toks, &src) {
+        if let Some(counts) = modal_header(&l, &src) {
+            modal = Some(counts);
+            continue;
+        }
+        if let Some(body) = strip_bullet(&l, &src) {
+            if modal.is_none() {
+                declines.push(decline(&l, "modal_bullet", DeclineReason::UnknownLineShape));
+                continue;
+            }
+            match spell_line(&body, &src) {
+                // A mode is an ability of its own, with no description: the
+                // printed text lives in `mode_descriptions` instead.
+                Ok(Lowered::SpellBody(chain, _)) => {
+                    match line::assemble(AbilityKind::Spell, None, chain, String::new()) {
+                        Some(mut a) => {
+                            a.description = None;
+                            modes.push(body.description.clone());
+                            out.abilities.push(a);
+                        }
+                        None => declines.push(decline(
+                            &l,
+                            "modal_bullet",
+                            DeclineReason::UnknownLineShape,
+                        )),
+                    }
+                }
+                Ok(_) => {
+                    declines.push(decline(&l, "modal_bullet", DeclineReason::UnknownLineShape))
+                }
+                Err(d) => declines.push(d),
+            }
+            continue;
+        }
+
         match parse_line(&l, &src) {
             Ok(Lowered::Keywords(mut kws)) => out.keywords.append(&mut kws),
             Ok(Lowered::SpellBody(chain, desc)) => spell_run.push((chain, desc)),
@@ -83,6 +122,24 @@ pub fn parse_card(name: &str, oracle: &str) -> CardParse {
 
     if let Some(a) = fold_spell_run(spell_run) {
         out.abilities.push(a);
+    }
+
+    if let Some((min_choices, max_raw)) = modal {
+        // "Choose one or more" caps at the number of modes printed, which is
+        // only known once they have all been read.
+        let mode_count = modes.len();
+        if mode_count == 0 {
+            out.modal = None;
+        } else {
+            out.modal = Some(phase_oracle_ast::ModalChoice {
+                min_choices,
+                max_choices: max_raw.min(mode_count).max(min_choices),
+                mode_count,
+                mode_descriptions: modes,
+                allow_repeat_modes: false,
+                chooser: phase_oracle_ast::TargetFilter::Controller,
+            });
+        }
     }
 
     CardParse { out, declines }
@@ -217,6 +274,48 @@ fn static_description(line: &str) -> String {
 /// real sentence after it. Two shapes are deliberately NOT stripped: a chapter
 /// head ("I —", "II, III —"), whose numeral is structural, and a modal header
 /// ("Choose one —"), which has nothing after the dash on its own line.
+/// `Choose one —` and its relatives. CR 700.2.
+///
+/// Returns the minimum and the maximum number of modes. The maximum for
+/// "one or more" is the mode COUNT, which the caller resolves once the bullets
+/// have been read; `usize::MAX` stands for it here.
+fn modal_header(l: &Line<'_>, src: &str) -> Option<(usize, usize)> {
+    let stream = Tokens::new(l.toks, src);
+    let (rest, _) = prim::word("choose")(stream).ok()?;
+
+    const COUNTS: &[(&str, (usize, usize))] = &[
+        ("one or both", (1, 2)),
+        ("one or more", (1, usize::MAX)),
+        ("one", (1, 1)),
+        ("two", (2, 2)),
+        ("three", (3, 3)),
+    ];
+    let (rest, counts) = prim::phrase_alt(COUNTS)(rest).ok()?;
+
+    // The em dash is what makes this a modal header rather than an instruction
+    // that happens to start with "choose".
+    let dash = rest.first()?;
+    (dash.kind == TokenKind::EmDash && line::is_exhausted(rest.take_from_n(1))).then_some(counts)
+}
+
+/// One printed mode, with its `•` removed.
+fn strip_bullet<'a>(l: &Line<'a>, src: &str) -> Option<Line<'a>> {
+    let first = l.toks.first()?;
+    if first.kind != TokenKind::Bullet {
+        return None;
+    }
+    let rest = &l.toks[1..];
+    if rest.is_empty() {
+        return None;
+    }
+    Some(Line {
+        toks: rest,
+        description: line::render(rest, src),
+        start: rest.first().expect("non-empty").span.start,
+        end: rest.last().expect("non-empty").span.end,
+    })
+}
+
 /// Labels that are printed like an ability word but name a referable class.
 const TAGGED_ABILITY_WORDS: &[(&str, ActivationTag)] = &[
     ("boast", ActivationTag::Boast),
