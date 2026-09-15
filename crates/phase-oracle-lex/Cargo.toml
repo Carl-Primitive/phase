@@ -5,3 +5,11 @@ edition = "2021"
 description = "Oracle text lexer: text -> token stream with spans."
 
 [dependencies]
+serde_json = { version = "1", optional = true }
+
+[features]
+corpus = ["dep:serde_json"]
+
+[[example]]
+name = "corpus_coverage"
+required-features = ["corpus"]

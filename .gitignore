@@ -142,3 +142,6 @@ scripts/changelog/backfill-drafts.json
 
 # Parser spike build dir
 target-spike/
+
+# Corpus export for the lexer harness (generated, not source)
+oracle-corpus.json
