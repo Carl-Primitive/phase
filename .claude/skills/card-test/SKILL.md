@@ -1,12 +1,12 @@
 ---
 name: card-test
-description: Canonical recipe for writing engine cast-pipeline tests. Use GameScenario + GameRunner::cast(...).resolve() and assert via CastOutcome deltas. Covers the six test-harness foot-guns (hand-written TargetRef vectors, incomplete modal target submission, wrong-point hand baseline, inline-keyword cards, AST-internal flag assertions, vacuous negative assertions) and the right-way fix for each. Use whenever writing or porting a runtime test that casts a spell and checks its effect.
+description: Canonical recipe for writing engine cast-pipeline tests. Use GameScenario + GameRunner::cast(...).resolve() and assert via CastOutcome deltas. Covers the nine test-harness foot-guns (hand-written TargetRef vectors, incomplete modal target submission, wrong-point hand baseline, inline-keyword cards, AST-internal flag assertions, vacuous negative assertions, unseeded libraries across a turn boundary, declaring blockers before the DeclareBlockers prompt, characteristic assertions before any layer pass) and the right-way fix for each. Use whenever writing or porting a runtime test that casts a spell and checks its effect.
 ---
 
 # card-test — the canonical cast-pipeline test recipe
 
 This skill gives ONE rigid recipe for runtime engine tests that cast a spell and
-assert its effect. It exists because six test-harness foot-guns recur; the
+assert its effect. It exists because nine test-harness foot-guns recur; the
 [`SpellCast`] driver and [`CastOutcome`] (in `crates/engine/src/game/scenario.rs`)
 make them structurally impossible when you follow this recipe.
 
@@ -84,7 +84,7 @@ fn my_card_does_the_thing() {
 | `final_waiting_for()` | the state the pipeline halted in |
 | `state()` | read-only `&GameState` for assertions the typed accessors don't cover |
 
-## Anti-patterns — the six foot-guns and the right-way fix
+## Anti-patterns — the nine foot-guns and the right-way fix
 
 1. **Hand-written `TargetRef` vectors.** Building a flat `Vec<TargetRef>` and
    submitting `SelectTargets { targets }` is fragile (`TargetRef` is non-`Copy`;
@@ -133,6 +133,39 @@ fn my_card_does_the_thing() {
    shape, or a positive runtime delta on the sibling path). Better still,
    replace the negative with a runtime regression whose assertion flips when
    the fix is reverted.
+
+7. **Crossing a turn boundary on an unseeded library.** `GameScenario::new()`
+   seeds no library cards, so the next player's draw step sets
+   `drew_from_empty_library` and the following SBA check ends the game
+   (CR 704.5b) before the phase you wanted; `advance_to_phase` then stops on
+   `WaitingFor::GameOver`, and a "no longer has X next turn" negative passes on
+   a dead board.
+   *Fix:* seed both libraries before building —
+   `scenario.with_library_top(P0, &["Filler"]); scenario.with_library_top(P1, &["Filler"]);`
+   — and guard the assertion with `phase`, `active_player`, and
+   `!matches!(waiting_for, WaitingFor::GameOver { .. })`.
+
+8. **Declaring blockers straight after declaring attackers.** After a
+   non-empty `DeclareAttackers` the engine hands the active player priority
+   (CR 508.2); `WaitingFor::DeclareBlockers` appears only once auto-advance
+   reaches the declare-blockers step, so an immediate
+   `runner.declare_blockers(..)` returns `Err`.
+   *Fix:* pass priority in a bounded loop until
+   `matches!(runner.state().waiting_for, WaitingFor::DeclareBlockers { .. })`
+   (see `advance_to_declare_blockers` in
+   `tests/integration/ogre_marauder_defending_player_unless_sacrifice.rs`), then
+   declare blockers. With no legal blocker the engine auto-submits an empty
+   declaration and the prompt never surfaces — drive with `advance_to_phase`.
+
+9. **Characteristic assertions before any layer pass.**
+   `GameScenario::build()` performs no layer evaluation and `has_keyword`
+   reads the layer-written `obj.keywords`, so a "does not have indestructible
+   yet" assertion taken before the first `apply()` is vacuous: it passes on the
+   reverted tree too.
+   *Fix:* call `engine::game::layers::evaluate_layers(runner.state_mut())`
+   before a pre-action characteristic assertion (precedent:
+   `tests/integration/frostcliff_siege_anchor_word_modes.rs`), or take the
+   baseline after an action that flushes layers.
 
 ## Hard rules
 

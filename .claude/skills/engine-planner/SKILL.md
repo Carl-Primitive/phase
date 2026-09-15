@@ -72,6 +72,17 @@ Use the skill checklist(s) as the skeleton of the final plan. Every checklist st
 
 Find the existing feature most similar to what you're implementing. Trace it end-to-end through every layer it touches: types → parser → resolver → effect handler → tests. Record each file path you followed. **Hard gate** — the plan must name the traced feature and list the full trace path.
 
+**Runtime-fact ordering is part of the trace.** When the design reads a game-state fact at evaluation
+time — a per-turn ledger, a combat set, a counter, a flag — through a layer-pass condition, a trigger
+matcher, or a replacement check, trace the *write* of that fact and the *flush or evaluation* that reads
+it within the same action, and confirm the write lands first. The recurring shape:
+`commit_attack_declaration` marked layers dirty and flushed them, then wrote
+`creatures_attacked_this_turn`, so a static gated on `FilterProp::AttackedThisTurn` was evaluated before
+the fact existed and cached a Clean verdict for the whole declare-attackers priority window. An analogy
+to a passing test is evidence only if that test reads the same fact: Crossway Troublemakers' keyword
+grants read `combat.attackers`, which is populated before the flush, and proved nothing about a ledger
+written after it.
+
 ### Step 3: Read every file you will touch
 
 Before proposing changes, read every file you plan to modify. Understand existing patterns, abstractions, and conventions in each.
@@ -110,17 +121,22 @@ true — a symbol name over a line number, "every case in §Y" over "the four ca
 carries the information, name the command that regenerates it. **A falsified snapshot is repaired by
 reformulating it, not by refreshing it.**
 
-**Probing needs the cargo target lock and a stable tree.** Use an isolated `CARGO_TARGET_DIR` and the
-worktree's absolute path; never build in a checkout another process (e.g. Tilt) owns. Serialize probe
-activity behind any active implementation executor on a shared worktree — read-only discovery may run
-concurrently. Never put a scratch target dir on tmpfs. Keep one isolated target dir per worktree and
-*reuse* it across probes — deleting it between runs buys nothing and re-imposes the full dependency
-rebuild that talks planners out of probing in the first place. Because that isolation exists,
-target-directory lock contention is not a reason to withhold builds: if you catch yourself writing "do
-not run cargo" into a brief, name the isolated target dir instead. Shared `CARGO_HOME` registry/package-
-cache locks are a separate lock domain that target-dir isolation doesn't touch, and can still delay a
-build. Capacity is the one thing isolation cannot fix — a fresh target dir costs disk rather than saving
-it — so a genuinely full or saturated box is worth naming, and worth probing once it clears.
+**Probing runs through Tilt, never through a second build.** This checkout is the one Tilt watches, and
+every cargo invocation outside Tilt — a direct `cargo test`, an isolated `CARGO_TARGET_DIR`, a second
+worktree — is a second cold build of the ~1.7M-line engine crate, the cost the engine-only loop exists to
+remove. A probe is therefore a throwaway integration test in the watched checkout: write it as
+`crates/engine/tests/integration/probe_<topic>.rs` with a `mod probe_<topic>;` line in
+`tests/integration/main.rs`, print the marker values with `eprintln!`, let Tilt's `test-engine` resource
+pick it up, and read the result with `./scripts/tilt-wait.sh test-engine` followed by
+`tilt logs test-engine --since 10m | grep -A 30 probe_<topic>` (nextest prints a failed test's stderr, so
+end the probe with `panic!("probe done")` after printing when you want its output shown). Delete the
+file and the `mod` line before the plan is handed back — a probe never enters the candidate. Only one
+agent may edit the watched checkout at a time: probe only when no implementation executor is active and
+never while another probe's build is in flight (a second edit restarts the build). Exit 3 from
+`tilt-wait.sh` means Tilt is down or watches another checkout — start `tilt up -- engine` or report that
+you could not measure; do not fall back to cargo. A saturated box (a cold Tilt loop still compiling) is
+worth naming: label the assertion unprobed rather than waiting the loop out, and say which test would
+buy it at implementation time.
 
 ### Step 4: Answer architectural questions
 

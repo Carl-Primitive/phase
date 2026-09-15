@@ -14,10 +14,14 @@ review, and it is the only instrument that can refute a plan whose prose is inte
 whose runtime behaviour differs. Static review structurally cannot catch a predicate that reads
 correctly and answers wrongly on a real board.
 
-Use an isolated `CARGO_TARGET_DIR` and the worktree's absolute path; never build in a checkout another
-process (e.g. Tilt) owns; serialize probe activity behind any active implementation executor. That
-isolation is why no brief needs to withhold builds from you — if one says "do not run cargo", use your
-own target dir and note it in your report.
+Probes run through Tilt, never through a second build: no direct cargo, no isolated `CARGO_TARGET_DIR`,
+no second worktree — each is a second cold build of the engine crate. Write the probe as a throwaway
+`crates/engine/tests/integration/probe_<topic>.rs` (plus its `mod` line) in the watched checkout, let
+Tilt's `test-engine` run it, read it back with `./scripts/tilt-wait.sh test-engine` and
+`tilt logs test-engine --since 10m | grep -A 30 probe_<topic>`, and delete both before reporting (the
+`engine-planner` skill's Step 3.5 has the full recipe). Serialize behind any active implementation
+executor and any in-flight probe build; if `tilt-wait.sh` answers 3 or the box is saturated by a cold
+loop, say what you could not measure and which test buys it, rather than falling back to cargo.
 
 ## Required Checks
 
@@ -58,6 +62,13 @@ own target dir and note it in your report.
    - Require justification for every new helper.
 
 3. **Trace verification**
+   - **Write-before-read ordering.** For every runtime fact the plan's condition reads (per-turn ledgers,
+     combat sets, counters, flags), confirm from the source that the write lands before the flush or
+     evaluation that reads it within the same action, and that any sibling test the plan cites as proof
+     reads the *same* fact. A layer pass that runs before the ledger write caches a Clean verdict for the
+     whole priority window (`commit_attack_declaration` flushed before writing
+     `creatures_attacked_this_turn`); a plan that leans on a passing test which reads a different field
+     has not shown this.
    - The plan must name an analogous existing feature and list the file path trace followed end to end.
    - Reject plans that did not trace an existing feature.
 
