@@ -1090,3 +1090,142 @@ fn attacking_with_your_team_is_a_different_event_from_one_creature_attacking() {
     assert_eq!(one[0]["mode"], "Attacks");
     assert_eq!(one[0]["valid_card"], json!({"type": "SelfRef"}));
 }
+
+// ---------------------------------------------------------------------------
+// Ability words, parameterized keywords, and position-dependent spellings
+// ---------------------------------------------------------------------------
+
+#[test]
+fn an_ability_word_is_flavour_and_is_dropped_including_from_the_description() {
+    // CR 207.2c: an ability word has no rules meaning.
+    let v = triggers(
+        "Storm-Kiln Artist",
+        "Magecraft — Whenever you cast a spell, create a Treasure token.",
+    );
+    assert_eq!(
+        v[0]["description"],
+        "Whenever you cast a spell, create a Treasure token."
+    );
+}
+
+#[test]
+fn a_spaced_em_dash_is_flavour_but_an_unspaced_one_joins_a_keyword_to_its_argument() {
+    // Magic's templating is bimodal here and the corpus confirms it: 3,518
+    // spaced against 439 unspaced, nothing in between. "Cumulative upkeep—Put a
+    // -1/-1 counter" must NOT lose its label, because the label is the keyword.
+    let p = parse_card(
+        "Aboroth",
+        "Cumulative upkeep—Put a -1/-1 counter on this creature.",
+    );
+    assert!(
+        !p.is_complete(),
+        "an unspaced dash joins a keyword to its argument and must not be stripped as flavour"
+    );
+}
+
+#[test]
+fn a_saga_chapter_head_is_not_an_ability_word() {
+    // CR 714.2: the numeral is structural.
+    let p = parse_card("Whatever", "I — Draw a card.");
+    assert!(p.out.abilities.is_empty() && !p.is_complete());
+}
+
+#[test]
+fn enchant_carries_the_filter_an_aura_may_attach_to() {
+    // CR 702.5a. A keyword with an argument, not a keyword with a name.
+    let v = parsed("Holy Strength", "Enchant creature");
+    assert_eq!(
+        v["keywords"],
+        json!([{
+            "Enchant": {
+                "type": "Typed",
+                "type_filters": ["Creature"],
+                "controller": null,
+                "properties": []
+            }
+        }])
+    );
+}
+
+#[test]
+fn equip_lowers_to_the_ability_the_keyword_stands_for() {
+    // CR 702.6b: none of "attach to a creature you control, at sorcery speed"
+    // is printed on the card, so all of it is derived from the keyword.
+    let v = abilities("Bonesplitter", "Equip {1}");
+    assert_eq!(
+        v[0]["effect"],
+        json!({
+            "type": "Attach",
+            "target": {
+                "type": "Typed",
+                "type_filters": ["Creature"],
+                "controller": "You",
+                "properties": []
+            }
+        })
+    );
+    assert_eq!(v[0]["kind"], "Activated");
+    assert_eq!(
+        v[0]["cost"],
+        json!({"type": "Mana", "cost": {"type": "Cost", "shards": [], "generic": 1}})
+    );
+    assert_eq!(
+        v[0]["activation_restrictions"],
+        json!([{"type": "AsSorcery"}])
+    );
+    assert_eq!(v[0]["ability_tag"], json!({"type": "Equip"}));
+    assert_eq!(v[0]["description"], "Equip {1}");
+}
+
+#[test]
+fn an_untargeted_filter_subject_pumps_as_the_mass_form() {
+    // CR 613.4b. Targeting, not plurality, separates the two: "enchanted
+    // creature gets +0/+1" reaches its object through a filter.
+    let untargeted = abilities(
+        "Armor of Faith",
+        "{W}: Enchanted creature gets +0/+1 until end of turn.",
+    );
+    assert_eq!(untargeted[0]["effect"]["type"], "PumpAll");
+
+    let targeted = abilities(
+        "Giant Growth",
+        "Target creature gets +3/+3 until end of turn.",
+    );
+    assert_eq!(targeted[0]["effect"]["type"], "Pump");
+
+    // The source itself is neither.
+    let own = abilities("Shivan Dragon", "{R}: ~ gets +1/+0 until end of turn.");
+    assert_eq!(own[0]["effect"]["type"], "Pump");
+    assert_eq!(own[0]["effect"]["target"], json!({"type": "SelfRef"}));
+}
+
+#[test]
+fn the_attached_host_is_spelled_one_way_in_a_trigger_and_another_in_a_filter() {
+    // Same printed words, two positions. A trigger watches the one object this
+    // Aura is on; a static ability reaches it through the filter.
+    let watched = triggers(
+        "Demonic Vigor",
+        "When enchanted creature dies, draw a card.",
+    );
+    assert_eq!(watched[0]["valid_card"], json!({"type": "AttachedTo"}));
+
+    let affected =
+        parsed("Holy Strength", "Enchanted creature gets +1/+2.")["static_abilities"].clone();
+    assert_eq!(
+        affected[0]["affected"]["properties"],
+        json!([{"type": "EnchantedBy"}])
+    );
+}
+
+#[test]
+fn multicolored_is_a_colour_count_rather_than_a_flag() {
+    // CR 105.4: so "multicolored" and "two or more colors" share one shape.
+    let v = abilities(
+        "Psychotic Fury",
+        "Target multicolored creature gains double strike until end of turn.",
+    );
+    assert_eq!(
+        v[0]["effect"]["target"]["properties"],
+        json!([{"type": "ColorCount", "comparator": "GE", "count": 2}])
+    );
+}

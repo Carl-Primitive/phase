@@ -43,6 +43,14 @@ impl SubAbilityLink {
 /// CR 602.5d and friends: when an activated ability may be activated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type")]
+pub enum AbilityTag {
+    Equip,
+    Fortify,
+    Reconfigure,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type")]
 pub enum ActivationRestriction {
     AsSorcery,
     OnlyOnceEachTurn,
@@ -73,6 +81,10 @@ pub struct AbilityDefinition {
     pub target_prompt: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub activation_restrictions: Vec<ActivationRestriction>,
+    /// CR 702.6b: which keyword this ability came from, for effects that refer
+    /// to abilities by keyword class.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ability_tag: Option<AbilityTag>,
     /// Always printed, even when null.
     pub condition: Option<serde_json::Value>,
     pub optional_targeting: bool,
@@ -117,6 +129,7 @@ impl AbilityDefinition {
             description: None,
             target_prompt: None,
             activation_restrictions: Vec::new(),
+            ability_tag: None,
             condition: None,
             optional_targeting: false,
             optional: false,

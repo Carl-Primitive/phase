@@ -125,6 +125,25 @@ fn trailing_whose(i: In<'_>) -> Option<(In<'_>, Option<serde_json::Value>)> {
     None
 }
 
+/// What a spell-cast trigger watches.
+///
+/// Unlike a targeting clause, this position does NOT wrap the filter in
+/// `StackSpell`: the trigger already knows it is watching a cast, so the filter
+/// only has to say which spells count. A bare "a spell" is therefore an empty
+/// type constraint rather than a missing one.
+fn cast_filter(i: In<'_>) -> R<'_, TargetFilter> {
+    let (r, _) = crate::prim::any_of(&["a", "an"])(i)?;
+    if let Ok((r2, _)) = crate::prim::any_of(&["spell", "spells"])(r) {
+        return Ok((
+            r2,
+            TargetFilter::Typed(phase_oracle_ast::TypedFilter::default()),
+        ));
+    }
+    let (r, types) = crate::target::typed_filter_list(r)?;
+    let (r, _) = crate::prim::any_of(&["spell", "spells"])(r)?;
+    Ok((r, types))
+}
+
 /// The object a `when`/`whenever` head watches.
 ///
 /// A trigger's watched object is a CLASS, not a target — "whenever another
@@ -135,7 +154,32 @@ fn watched(i: In<'_>) -> R<'_, TargetFilter> {
         return Ok((r, TargetFilter::SelfRef));
     }
     let (r, s) = subject(i)?;
+
+    // "When ENCHANTED CREATURE dies" watches the one object this Aura is on,
+    // which the engine names directly rather than through the filter it uses in
+    // a static ability's `affected` slot. Same printed words, two positions,
+    // two spellings — so the translation happens here, once.
+    if let Some(attached) = as_attached_host(&s.filter) {
+        return Ok((r, attached));
+    }
     Ok((r, s.filter))
+}
+
+/// Recognize the "this source's own host" filter shape.
+fn as_attached_host(f: &TargetFilter) -> Option<TargetFilter> {
+    let TargetFilter::Typed(t) = f else {
+        return None;
+    };
+    t.properties
+        .iter()
+        .any(|p| {
+            matches!(
+                p,
+                phase_oracle_ast::FilterProp::EnchantedBy
+                    | phase_oracle_ast::FilterProp::EquippedBy
+            )
+        })
+        .then_some(TargetFilter::AttachedTo)
 }
 
 /// `when[ever] <object> <event>`.
@@ -153,9 +197,9 @@ fn event_head(i: In<'_>) -> R<'_, TriggerHead> {
     // "you cast" / "a player casts" is a spell-cast trigger, whose watched
     // object is the SPELL rather than the subject that cast it.
     if let Ok((r2, _)) = phrase("you cast")(r) {
-        let (r3, s) = subject(r2)?;
+        let (r3, f) = cast_filter(r2)?;
         let mut h = TriggerHead::mode(TriggerMode::SpellCast);
-        h.valid_card = Some(s.filter);
+        h.valid_card = Some(f);
         return Ok((r3, h));
     }
 

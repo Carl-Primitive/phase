@@ -15,6 +15,7 @@
 
 pub mod cost;
 pub mod effect;
+pub mod keywords;
 pub mod line;
 pub mod normalize;
 pub mod prim;
@@ -147,6 +148,22 @@ fn parse_line(l: &Line<'_>, src: &str) -> Result<Lowered, Decline> {
         return Ok(Lowered::Keywords(kws));
     }
 
+    // CR 207.2c: an ability word is flavour. It has no rules meaning, the
+    // engine does not keep it even in the description, and stripping it here
+    // means every production below reads the sentence it introduces rather than
+    // needing its own leading-label arm.
+    if let Some(inner) = strip_ability_word(l, src) {
+        return parse_line(&inner, src);
+    }
+
+    // CR 702.5 / CR 702.6: a keyword line that carries an ARGUMENT.
+    if let Some(kw) = keywords::enchant_line(stream) {
+        return Ok(Lowered::Keywords(vec![kw]));
+    }
+    if let Some(a) = keywords::equip_line(stream, &l.description) {
+        return Ok(Lowered::Ability(Box::new(a)));
+    }
+
     if let Some(colon) = top_level_colon(l.toks) {
         return activated_line(l, src, colon).map(|a| Lowered::Ability(Box::new(a)));
     }
@@ -156,6 +173,58 @@ fn parse_line(l: &Line<'_>, src: &str) -> Result<Lowered, Decline> {
     }
 
     spell_line(l, src)
+}
+
+/// Drop a leading ability word, yielding the line it introduces.
+///
+/// An ability word is one or more capitalized words before an em dash, with a
+/// real sentence after it. Two shapes are deliberately NOT stripped: a chapter
+/// head ("I —", "II, III —"), whose numeral is structural, and a modal header
+/// ("Choose one —"), which has nothing after the dash on its own line.
+fn strip_ability_word<'a>(l: &Line<'a>, src: &str) -> Option<Line<'a>> {
+    let dash = l.toks.iter().position(|t| t.kind == TokenKind::EmDash)?;
+
+    // Magic's templating separates an ability WORD from its sentence with a
+    // SPACED em dash, and joins a keyword to its argument with an unspaced one
+    // ("Cumulative upkeep—Put a -1/-1 counter on this creature"). The corpus is
+    // bimodal on this: 3,518 spaced against 439 unspaced, with no middle. That
+    // typographic distinction is the only reliable way to tell flavour from a
+    // keyword whose argument follows, so it is read rather than guessed at from
+    // a list of ability words that every set adds to.
+    let d = l.toks[dash].span;
+    let spaced = src[..d.start].ends_with(' ') && src[d.end..].starts_with(' ');
+    if !spaced {
+        return None;
+    }
+
+    let (label, rest) = (&l.toks[..dash], &l.toks[dash + 1..]);
+
+    if label.is_empty() || rest.is_empty() {
+        return None;
+    }
+    // Every label token must be a word or a comma; a numeral or a symbol means
+    // this dash is doing structural work, not introducing flavour.
+    if !label
+        .iter()
+        .all(|t| matches!(t.kind, TokenKind::Word | TokenKind::Comma))
+    {
+        return None;
+    }
+    if label.iter().any(|t| is_roman_numeral(t.text(src))) {
+        return None;
+    }
+
+    Some(Line {
+        toks: rest,
+        description: line::render(rest, src),
+        start: rest.first().expect("non-empty").span.start,
+        end: rest.last().expect("non-empty").span.end,
+    })
+}
+
+/// CR 714.2: a Saga chapter head, which must not be mistaken for flavour.
+fn is_roman_numeral(w: &str) -> bool {
+    !w.is_empty() && w.chars().all(|c| matches!(c, 'I' | 'V' | 'X'))
 }
 
 /// The index of the colon that separates cost from effect, if the line has one.

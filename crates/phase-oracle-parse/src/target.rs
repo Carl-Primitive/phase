@@ -8,8 +8,8 @@
 //! at emission, instead of doubling every verb production here.
 
 use phase_oracle_ast::{
-    AttachmentKind, ControllerRef, FilterProp, ManaColor, TargetFilter, TypeFilter, TypedFilter,
-    Zone,
+    AttachmentKind, Comparator, ControllerRef, FilterProp, ManaColor, TargetFilter, TypeFilter,
+    TypedFilter, Zone,
 };
 
 use crate::prim::{any_of, fail, phrase, phrase_alt, self_ref, word, In, R};
@@ -138,6 +138,10 @@ fn state_prop(w: &str) -> Option<FilterProp> {
         "token" => FilterProp::Token,
         "nontoken" => FilterProp::NonToken,
         "commander" => FilterProp::IsCommander,
+        "multicolored" => FilterProp::ColorCount {
+            comparator: Comparator::GE,
+            count: 2,
+        },
         "face-down" => FilterProp::FaceDown,
         _ => return None,
     })
@@ -302,7 +306,7 @@ fn typed_filter(i: In<'_>) -> R<'_, TypedFilter> {
 /// Lowered to `TargetFilter::Or`, one filter per alternative, which is the
 /// engine's shape. Composed by iteration rather than by enumerating list
 /// lengths, so a four-way list costs nothing extra.
-fn typed_filter_list(i: In<'_>) -> R<'_, TargetFilter> {
+pub fn typed_filter_list(i: In<'_>) -> R<'_, TargetFilter> {
     // CR 109.5: "another" is printed ONCE before the whole list and excludes the
     // source from every alternative — "sacrifice another creature or artifact"
     // means another of either. Stripping it here rather than inside

@@ -24,7 +24,8 @@ pub mod static_ability;
 pub mod trigger;
 
 pub use ability::{
-    AbilityDefinition, AbilityKind, ActivationRestriction, Duration, PlayerScope, SubAbilityLink,
+    AbilityDefinition, AbilityKind, AbilityTag, ActivationRestriction, Duration, PlayerScope,
+    SubAbilityLink,
 };
 pub use cost::{AbilityCost, ManaCost, ManaShard, SacrificeCost};
 pub use effect::{ChoiceTiming, CounterType, Effect, ManaProduced, TapScope, TapState, ZoneName};
@@ -57,6 +58,12 @@ pub enum Keyword {
     Landwalk {
         #[serde(rename = "Landwalk")]
         land_type: String,
+    },
+    /// CR 702.5: "Enchant creature" states what an Aura may legally be attached
+    /// to, so the keyword carries a filter rather than standing alone.
+    Enchant {
+        #[serde(rename = "Enchant")]
+        filter: TargetFilter,
     },
 }
 

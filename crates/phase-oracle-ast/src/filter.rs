@@ -123,6 +123,13 @@ pub enum FilterProp {
     },
     EnchantedBy,
     EquippedBy,
+    /// CR 105.4: "multicolored" is a colour COUNT, not a flag — the engine
+    /// spells it as a comparison so "two or more colors" and "multicolored"
+    /// share one representation.
+    ColorCount {
+        comparator: Comparator,
+        count: u8,
+    },
     /// CR 903.3: the object is a commander.
     IsCommander,
     /// CR 708.2: the object is a face-down permanent.

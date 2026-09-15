@@ -1065,8 +1065,19 @@ fn lower_predicates(
                     _ => None,
                 })
                 .unwrap_or(0);
+            // CR 613.4b: a filter-based subject the text did NOT target is the
+            // mass form even when the noun is singular — "enchanted creature
+            // gets +0/+1" pumps whatever this Aura is on, through the filter.
+            // Targeting, not plurality, is what separates the two here: a
+            // measured split of 536 untargeted `PumpAll` against 898 targeted
+            // `Pump` in the corpus.
+            let pt_scope = if !s.targeted && matches!(s.filter, TargetFilter::Typed(_)) {
+                Scope::All
+            } else {
+                Scope::Single
+            };
             scoped(
-                s.scope,
+                pt_scope,
                 Effect::Pump {
                     power: Quantity::fixed(power),
                     toughness: Quantity::fixed(toughness),

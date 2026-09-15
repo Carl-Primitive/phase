@@ -243,6 +243,9 @@ pub enum Effect {
     },
     /// CR 701.15a.
     Regenerate { target: TargetFilter },
+    /// CR 701.3a: attach this permanent to another. The Equip and Fortify
+    /// keyword abilities lower to this.
+    Attach { target: TargetFilter },
     /// CR 605: a mana ability's production.
     Mana { produced: ManaProduced },
     /// CR 111: token creation.
