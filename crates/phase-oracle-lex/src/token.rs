@@ -58,10 +58,17 @@ pub enum Sign {
 /// One part of a power/toughness pair: a literal, or `X`/`*`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PtPart {
-    Number { sign: Sign, value: u32 },
-    Variable { sign: Sign },
+    Number {
+        sign: Sign,
+        value: u32,
+    },
+    Variable {
+        sign: Sign,
+    },
     /// `*`, the characteristic-defining star.
-    Star { sign: Sign },
+    Star {
+        sign: Sign,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -77,17 +84,35 @@ pub enum TokenKind {
     /// mana grammar owns interpretation.
     Symbol,
     /// A bracketed loyalty cost: `[+1]`, `[−3]`, `[0]`, `[−X]`. 1,108 brackets.
-    Loyalty { cost: PtPart },
+    Loyalty {
+        cost: PtPart,
+    },
     /// A power/toughness pair: `+2/+1`, `-1/-1`, `2/2`, `+X/+X`, `*/*`.
     /// 10,348 signed and 4,165 bare occurrences.
-    PtPair { power: PtPart, toughness: PtPart },
+    PtPair {
+        power: PtPart,
+        toughness: PtPart,
+    },
     /// A parenthesised reminder-text span, including its delimiters.
     /// Nesting-aware: 839 reminder spans contain a quoted ability, and 5 nest
     /// parentheses more than one deep.
-    Reminder { terminated: bool },
+    Reminder {
+        terminated: bool,
+    },
     /// A double-quoted span, including its delimiters. Usually a granted or
     /// printed ability belonging to another object.
-    Quoted { terminated: bool },
+    Quoted {
+        terminated: bool,
+    },
+    /// `~`, the card's own name after self-reference normalization.
+    ///
+    /// Never printed on a card: the corpus contains no tilde. It exists because
+    /// normalization runs BEFORE the lexer, so "Shivan Dragon" and "this
+    /// creature" both arrive here as one token the grammar matches once,
+    /// instead of a name-shaped phrase every production would have to
+    /// re-recognize. It is also exactly the spelling the engine prints in an
+    /// ability's `description`, so descriptions need no second substitution.
+    SelfRef,
     /// `•`, the modal option marker. 2,061 occurrences.
     Bullet,
     /// `—` U+2014 EM DASH. Separates ability-word and chapter heads. 4,682.
@@ -123,7 +148,10 @@ pub struct Token {
 
 impl Token {
     pub fn new(kind: TokenKind, start: usize, end: usize) -> Self {
-        Self { kind, span: Span::new(start, end) }
+        Self {
+            kind,
+            span: Span::new(start, end),
+        }
     }
 
     pub fn text<'a>(&self, source: &'a str) -> &'a str {

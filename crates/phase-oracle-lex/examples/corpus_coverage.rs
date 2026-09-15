@@ -6,7 +6,9 @@ use phase_oracle_lex::{lex, verify_coverage, TokenKind};
 use std::collections::BTreeMap;
 
 fn main() {
-    let path = std::env::args().nth(1).expect("usage: corpus_coverage <corpus.json>");
+    let path = std::env::args()
+        .nth(1)
+        .expect("usage: corpus_coverage <corpus.json>");
     let raw = std::fs::read_to_string(&path).expect("read corpus");
     let cards: Vec<serde_json::Value> = serde_json::from_str(&raw).expect("parse corpus");
 
@@ -34,13 +36,18 @@ fn main() {
                 TokenKind::Loyalty { .. } => "Loyalty",
                 TokenKind::PtPair { .. } => "PtPair",
                 TokenKind::Reminder { terminated } => {
-                    if !terminated { unterminated_reminder += 1; }
+                    if !terminated {
+                        unterminated_reminder += 1;
+                    }
                     "Reminder"
                 }
                 TokenKind::Quoted { terminated } => {
-                    if !terminated { unterminated_quote += 1; }
+                    if !terminated {
+                        unterminated_quote += 1;
+                    }
                     "Quoted"
                 }
+                TokenKind::SelfRef => "SelfRef",
                 TokenKind::Bullet => "Bullet",
                 TokenKind::EmDash => "EmDash",
                 TokenKind::Period => "Period",

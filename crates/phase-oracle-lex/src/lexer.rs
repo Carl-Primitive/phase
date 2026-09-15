@@ -122,6 +122,7 @@ pub fn lex(src: &str) -> Vec<Token> {
             '-' => TokenKind::Hyphen,
             '|' => TokenKind::Pipe,
             '/' => TokenKind::Slash,
+            '~' => TokenKind::SelfRef,
             '•' => TokenKind::Bullet,
             '—' => TokenKind::EmDash,
             _ => TokenKind::Other,
@@ -135,7 +136,11 @@ pub fn lex(src: &str) -> Vec<Token> {
 
 /// Byte search from `from`, returning an absolute index.
 fn memchr(bytes: &[u8], needle: u8, from: usize) -> Option<usize> {
-    bytes.get(from..)?.iter().position(|&b| b == needle).map(|p| p + from)
+    bytes
+        .get(from..)?
+        .iter()
+        .position(|&b| b == needle)
+        .map(|p| p + from)
 }
 
 /// Scan a parenthesised span starting at `open`. Returns the end offset
@@ -212,7 +217,11 @@ fn scan_pt_pair(src: &str, i: usize) -> Option<(PtPart, PtPart, usize)> {
     }
     let (toughness, end) = scan_pt_part(src, after_power + 1)?;
     // Reject a trailing alphanumeric so `2/2x` is not read as a pair.
-    if src[end..].chars().next().is_some_and(|c| c.is_alphanumeric()) {
+    if src[end..]
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_alphanumeric())
+    {
         return None;
     }
     Some((power, toughness, end))
@@ -273,9 +282,16 @@ fn scan_while(src: &str, start: usize, pred: impl Fn(char) -> bool) -> usize {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CoverageError {
     /// Two tokens overlap, or they are not in ascending order.
-    Overlap { previous_end: usize, next_start: usize },
+    Overlap {
+        previous_end: usize,
+        next_start: usize,
+    },
     /// A gap between tokens held something other than whitespace.
-    UnclaimedText { start: usize, end: usize, text: String },
+    UnclaimedText {
+        start: usize,
+        end: usize,
+        text: String,
+    },
 }
 
 /// Assert that `tokens` account for every byte of `src`.

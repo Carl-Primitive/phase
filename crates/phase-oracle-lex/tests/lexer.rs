@@ -56,7 +56,10 @@ fn loyalty_accepts_both_minus_spellings() {
         assert_eq!(
             kinds(src),
             vec![TokenKind::Loyalty {
-                cost: PtPart::Number { sign: Sign::Minus, value: 3 }
+                cost: PtPart::Number {
+                    sign: Sign::Minus,
+                    value: 3
+                }
             }],
             "failed for {src:?}"
         );
@@ -65,18 +68,26 @@ fn loyalty_accepts_both_minus_spellings() {
     assert_eq!(
         kinds("[+1]"),
         vec![TokenKind::Loyalty {
-            cost: PtPart::Number { sign: Sign::Plus, value: 1 }
+            cost: PtPart::Number {
+                sign: Sign::Plus,
+                value: 1
+            }
         }]
     );
     assert_eq!(
         kinds("[0]"),
         vec![TokenKind::Loyalty {
-            cost: PtPart::Number { sign: Sign::None, value: 0 }
+            cost: PtPart::Number {
+                sign: Sign::None,
+                value: 0
+            }
         }]
     );
     assert_eq!(
         kinds("[\u{2212}X]"),
-        vec![TokenKind::Loyalty { cost: PtPart::Variable { sign: Sign::Minus } }]
+        vec![TokenKind::Loyalty {
+            cost: PtPart::Variable { sign: Sign::Minus }
+        }]
     );
 }
 
@@ -87,7 +98,9 @@ fn non_loyalty_brackets_stay_total() {
     let src = "[CHOICE A] and [with mana value 2 or less]";
     assert_total(src);
     assert!(
-        !lex(src).iter().any(|t| matches!(t.kind, TokenKind::Loyalty { .. })),
+        !lex(src)
+            .iter()
+            .any(|t| matches!(t.kind, TokenKind::Loyalty { .. })),
         "placeholder brackets must not be read as loyalty costs"
     );
 }
@@ -95,14 +108,56 @@ fn non_loyalty_brackets_stay_total() {
 #[test]
 fn pt_pairs_cover_signed_bare_variable_and_star() {
     let cases = [
-        ("+2/+1", PtPart::Number { sign: Sign::Plus, value: 2 }, PtPart::Number { sign: Sign::Plus, value: 1 }),
-        ("-1/-1", PtPart::Number { sign: Sign::Minus, value: 1 }, PtPart::Number { sign: Sign::Minus, value: 1 }),
-        ("2/2", PtPart::Number { sign: Sign::None, value: 2 }, PtPart::Number { sign: Sign::None, value: 2 }),
-        ("+X/+X", PtPart::Variable { sign: Sign::Plus }, PtPart::Variable { sign: Sign::Plus }),
-        ("*/*", PtPart::Star { sign: Sign::None }, PtPart::Star { sign: Sign::None }),
+        (
+            "+2/+1",
+            PtPart::Number {
+                sign: Sign::Plus,
+                value: 2,
+            },
+            PtPart::Number {
+                sign: Sign::Plus,
+                value: 1,
+            },
+        ),
+        (
+            "-1/-1",
+            PtPart::Number {
+                sign: Sign::Minus,
+                value: 1,
+            },
+            PtPart::Number {
+                sign: Sign::Minus,
+                value: 1,
+            },
+        ),
+        (
+            "2/2",
+            PtPart::Number {
+                sign: Sign::None,
+                value: 2,
+            },
+            PtPart::Number {
+                sign: Sign::None,
+                value: 2,
+            },
+        ),
+        (
+            "+X/+X",
+            PtPart::Variable { sign: Sign::Plus },
+            PtPart::Variable { sign: Sign::Plus },
+        ),
+        (
+            "*/*",
+            PtPart::Star { sign: Sign::None },
+            PtPart::Star { sign: Sign::None },
+        ),
     ];
     for (src, power, toughness) in cases {
-        assert_eq!(kinds(src), vec![TokenKind::PtPair { power, toughness }], "failed for {src:?}");
+        assert_eq!(
+            kinds(src),
+            vec![TokenKind::PtPair { power, toughness }],
+            "failed for {src:?}"
+        );
         assert_total(src);
     }
 }
@@ -112,7 +167,9 @@ fn pt_pairs_cover_signed_bare_variable_and_star() {
 fn pt_pair_declines_when_followed_by_alphanumeric() {
     let src = "2/2x";
     assert!(
-        !lex(src).iter().any(|t| matches!(t.kind, TokenKind::PtPair { .. })),
+        !lex(src)
+            .iter()
+            .any(|t| matches!(t.kind, TokenKind::PtPair { .. })),
         "`2/2x` is not a power/toughness pair"
     );
     assert_total(src);
@@ -147,7 +204,8 @@ fn truncated_reminder_span_is_unterminated_but_total() {
     let src = "create a token. (It's an aura with \"enchanted creature gets +1/+1 for each";
     let toks = lex(src);
     assert!(
-        toks.iter().any(|t| t.kind == TokenKind::Reminder { terminated: false }),
+        toks.iter()
+            .any(|t| t.kind == TokenKind::Reminder { terminated: false }),
         "expected an unterminated reminder span: {toks:?}"
     );
     assert_total(src);
@@ -164,7 +222,8 @@ fn truncated_reminder_span_is_unterminated_but_total() {
 /// stays total and nothing panics.
 #[test]
 fn nested_quotes_pair_in_printed_order_and_stay_total() {
-    let src = "named Rock with \"Equipped creature has \"{1}, {T}: deals 2 damage.\" and equip {1}.\"";
+    let src =
+        "named Rock with \"Equipped creature has \"{1}, {T}: deals 2 damage.\" and equip {1}.\"";
     assert_total(src);
     let first = lex(src)
         .into_iter()
@@ -181,7 +240,10 @@ fn nested_quotes_pair_in_printed_order_and_stay_total() {
 fn unterminated_brace_does_not_swallow_the_remainder() {
     let src = "{T: Add {R}.";
     assert_total(src);
-    assert!(lex(src).len() > 1, "a stray brace must not consume everything");
+    assert!(
+        lex(src).len() > 1,
+        "a stray brace must not consume everything"
+    );
 }
 
 /// Spree prints its options as a line-leading `+` with a cost (21 cards).
@@ -201,8 +263,13 @@ fn roll_table_rows_lex_as_composable_atoms() {
     assert_eq!(
         kinds("1-6 | Add {R}."),
         vec![
-            TokenKind::Number, TokenKind::Hyphen, TokenKind::Number, TokenKind::Pipe,
-            TokenKind::Word, TokenKind::Symbol, TokenKind::Period,
+            TokenKind::Number,
+            TokenKind::Hyphen,
+            TokenKind::Number,
+            TokenKind::Pipe,
+            TokenKind::Word,
+            TokenKind::Symbol,
+            TokenKind::Period,
         ]
     );
     assert_eq!(kinds("1\u{2014}9 |")[1], TokenKind::EmDash);
@@ -217,7 +284,12 @@ fn roll_table_rows_lex_as_composable_atoms() {
 fn newlines_are_emitted_and_other_whitespace_is_not() {
     assert_eq!(
         kinds("a\nb   c"),
-        vec![TokenKind::Word, TokenKind::Newline, TokenKind::Word, TokenKind::Word]
+        vec![
+            TokenKind::Word,
+            TokenKind::Newline,
+            TokenKind::Word,
+            TokenKind::Word
+        ]
     );
     assert_total("a\nb   c");
 }
@@ -232,7 +304,11 @@ fn empty_and_whitespace_only_inputs_are_total() {
 /// Multi-byte input must never split a char boundary.
 #[test]
 fn multibyte_text_is_total_and_boundary_safe() {
-    for src in ["\u{2014}\u{2022}\u{2212}\u{221E}", "Éomer, Marshal of Rohan", "\u{2610} \u{2192} \u{2666}"] {
+    for src in [
+        "\u{2014}\u{2022}\u{2212}\u{221E}",
+        "Éomer, Marshal of Rohan",
+        "\u{2610} \u{2192} \u{2666}",
+    ] {
         assert_total(src);
         for t in lex(src) {
             assert!(src.is_char_boundary(t.span.start) && src.is_char_boundary(t.span.end));

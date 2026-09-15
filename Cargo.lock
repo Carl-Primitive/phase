@@ -1949,13 +1949,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "phase-card-schema"
-version = "0.1.0"
-dependencies = [
- "serde",
-]
-
-[[package]]
 name = "phase-engine"
 version = "0.83.0"
 dependencies = [
@@ -1991,6 +1984,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "phase-oracle-ast"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "phase-oracle-lex"
 version = "0.1.0"
 dependencies = [
@@ -2002,8 +2003,9 @@ name = "phase-oracle-parse"
 version = "0.1.0"
 dependencies = [
  "nom",
- "phase-card-schema",
+ "phase-oracle-ast",
  "phase-oracle-lex",
+ "serde",
  "serde_json",
 ]
 

@@ -37,7 +37,10 @@ impl<'a> Tokens<'a> {
 
     /// Drop the first `n` tokens.
     pub fn take_from_n(&self, n: usize) -> Self {
-        Tokens { toks: &self.toks[n.min(self.toks.len())..], src: self.src }
+        Tokens {
+            toks: &self.toks[n.min(self.toks.len())..],
+            src: self.src,
+        }
     }
 
     /// Byte span covered by the remaining tokens.
@@ -56,16 +59,31 @@ impl<'a> Input for Tokens<'a> {
     }
 
     fn take(&self, index: usize) -> Self {
-        Tokens { toks: &self.toks[..index], src: self.src }
+        Tokens {
+            toks: &self.toks[..index],
+            src: self.src,
+        }
     }
 
     fn take_from(&self, index: usize) -> Self {
-        Tokens { toks: &self.toks[index..], src: self.src }
+        Tokens {
+            toks: &self.toks[index..],
+            src: self.src,
+        }
     }
 
     fn take_split(&self, index: usize) -> (Self, Self) {
         let (a, b) = self.toks.split_at(index);
-        (Tokens { toks: b, src: self.src }, Tokens { toks: a, src: self.src })
+        (
+            Tokens {
+                toks: b,
+                src: self.src,
+            },
+            Tokens {
+                toks: a,
+                src: self.src,
+            },
+        )
     }
 
     fn position<P>(&self, predicate: P) -> Option<usize>
