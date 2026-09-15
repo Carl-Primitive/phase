@@ -161,6 +161,7 @@ cargo fmt --all
 # Through Tilt (see CLAUDE.md § "Canonical verification pattern"). Tilt down?
 # start `tilt up -- engine` and wait — a direct cargo run is a second full engine build.
 ./scripts/tilt-wait.sh --timeout 900 clippy test-engine card-data
+# one failing test of your own? printf 'test(/<pattern>/)\n' > .tilt-test-focus && tilt trigger test-engine-focus   (same artifacts, only those tests; full test-engine is still the gate)
 
 # One-shot audit binaries (not Tilt resources — direct invocation in both modes):
 cargo coverage                                        # final flip count (reads fresh card-data.json)

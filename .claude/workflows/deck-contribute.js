@@ -433,6 +433,7 @@ function clusterVerifyPrompt(mechanic, cards) {
     `command):\n` +
     `1. ./scripts/verify-card.sh ${cards.map((c) => JSON.stringify(c)).join(' ')}\n` +
     `   (single entrypoint: cargo fmt; tilt-wait clippy/test-engine/card-data; ` +
+    `   fix rounds: .tilt-test-focus + tilt trigger test-engine-focus for just the failing tests; ` +
     `per-card coverage supported:true gap_count:0; cargo semantic-audit 0 findings ` +
     `per card; Gate A). Exit 3 = Tilt not running: start the engine loop ` +
     `(nohup tilt up --stream -- engine > /tmp/tilt-up.log 2>&1 &), wait for ` +

@@ -367,7 +367,7 @@ Every feature MUST have:
 8. Create `policies/mulligan/<feat>_keepables.rs` + tests. Add `PolicyId` variant + register in `MulliganRegistry::default`.
 9. (Optional) Add `plan/curves.rs` branches with tests.
 10. (Optional) Cross-feature amplification (Section 10).
-11. Run `cargo fmt --all`, then use Tilt verification: `./scripts/tilt-wait.sh clippy test-ai`. If Tilt is down, fall back to the direct phase-ai clippy/test commands.
+11. Run `cargo fmt --all`, then use Tilt verification: `./scripts/tilt-wait.sh clippy test-ai`. If Tilt is down, start it (`tilt up -- engine test`) and rerun; a direct `cargo clippy`/`cargo test -p phase-ai` outside Tilt is a second full engine build.
 12. Run `rtk cargo ai-gate` for new policy work.
 13. Commit with explicit `git add path1 path2 ...`. NEVER `git add -A`.
 14. Spawn an opus advisory review (see `git log --grep="address review"` for prior fix-up commit messages as templates). Address MUST FIX in a follow-up commit; CONSIDER items at your discretion.

@@ -194,7 +194,7 @@ Some keywords require synthesis in `synthesis.rs` — converting the keyword int
 
 - [ ] **Runtime behavior tests** in the relevant game module (combat, targeting, etc.) — at least one must drive the real pipeline (`apply()` / scenario runner / the `/card-test` cast recipe) with a revert-failing assertion. Keyword PRs shipping only `FromStr`/AST-shape tests are the single most common review rejection. Negative assertions need a positive reach-guard (see `/card-test` foot-gun 6); build keyworded test cards via `from_oracle_text_with_keywords`, never inline reminder text.
 
-- [ ] **Verify** per CLAUDE.md § "Canonical verification pattern" — `cargo fmt --all`, then `./scripts/tilt-wait.sh --timeout 900 clippy test-engine card-data` (Tilt down? start `tilt up -- engine` and wait — no direct-cargo fallback, it would be a second full engine build); for a card, `./scripts/verify-card.sh "<Card Name>"` does all of this plus coverage, semantic-audit and Gate A.
+- [ ] **Verify** per CLAUDE.md § "Canonical verification pattern" — `cargo fmt --all`, then `./scripts/tilt-wait.sh --timeout 900 clippy test-engine card-data` (Tilt down? start `tilt up -- engine` and wait — no direct-cargo fallback, it would be a second full engine build); for a card, `./scripts/verify-card.sh "<Card Name>"` does all of this plus coverage, semantic-audit and Gate A. Iterating on one failing test of your own? `printf 'test(/<pattern>/)\n' > .tilt-test-focus && tilt trigger test-engine-focus` reruns only the matching tests on the same artifacts (`tilt logs test-engine-focus`); the full `test-engine` run at the final tree is still the gate.
 
 ---
 

@@ -273,7 +273,7 @@ Tilt-preferred / direct-cargo fallback (see CLAUDE.md § "Canonical verification
 
 - [ ] **Discriminating runtime test** — At least one test drives the real pipeline via the `/card-test` recipe (`GameScenario` + `GameRunner::cast(..).resolve()` + `CastOutcome` deltas, verbatim Oracle text) and would FAIL if the change were reverted. Parser AST-shape tests (Phase 4) and snapshots do NOT satisfy this — they are shape tests, not regression tests. Negative assertions need a paired positive reach-guard (see `/card-test` foot-gun 6).
 - [ ] **`cargo fmt --all`** — Always direct (Tilt doesn't auto-format).
-- [ ] **Clippy + tests** — If `tilt get uiresource clippy >/dev/null 2>&1` succeeds: `./scripts/tilt-wait.sh --timeout 240 clippy test-engine`. Otherwise: `cargo clippy --all-targets -- -D warnings` followed by `cargo test -p phase-engine`.
+- [ ] **Clippy + tests** — `cargo fmt --all`, then `./scripts/tilt-wait.sh --timeout 900 clippy test-engine card-data` (Tilt down? start `tilt up -- engine` and rerun; there is no direct-cargo path — a direct `cargo clippy`/`test` is a second full engine build). Iterating on one failing test of your own? `printf 'test(/<pattern>/)\n' > .tilt-test-focus && tilt trigger test-engine-focus` reruns only the matching tests on the same artifacts (`tilt logs test-engine-focus`); the full `test-engine` run at the final tree is still the gate.
 - [ ] **Snapshot test** — If the effect changes a card's parsed abilities, update or add an `insta` snapshot in `crates/engine/tests/oracle_parser.rs`.
 - [ ] **`cargo coverage`** — One-shot binary (always direct). Verifies the new effect reduces `Unimplemented` count for the target cards.
 

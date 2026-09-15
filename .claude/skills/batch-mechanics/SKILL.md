@@ -92,6 +92,7 @@ When a teammate finishes implementing, direct them through these steps **in orde
 > 2. Verify clippy + tests through Tilt (start `tilt up -- engine` if it is down; no direct-cargo fallback):
 >    ```bash
 >    ./scripts/tilt-wait.sh --timeout 900 clippy test-engine card-data
+>    # one failing test of your own? printf 'test(/<pattern>/)\n' > .tilt-test-focus && tilt trigger test-engine-focus   (same artifacts, only those tests; full test-engine is still the gate)
 >    ```
 > 3. If you added or changed parser output, accept new snapshots: `cargo insta accept`
 > 4. Run coverage (one-shot, always direct): `cargo coverage`"
@@ -109,6 +110,7 @@ After all groups are complete:
    ```bash
    if tilt get uiresource clippy >/dev/null 2>&1; then
      ./scripts/tilt-wait.sh --timeout 300 clippy test-engine card-data
+     # one failing test of your own? printf 'test(/<pattern>/)\n' > .tilt-test-focus && tilt trigger test-engine-focus   (same artifacts, only those tests; full test-engine is still the gate)
    else
      cargo test --all
      ./scripts/gen-card-data.sh

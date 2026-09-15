@@ -250,6 +250,7 @@ function verifyPrompt(card) {
     `before continuing:\n` +
     `    ./scripts/verify-card.sh "${card}"\n` +
     `It runs, in order: cargo fmt --all; tilt-wait clippy test-engine card-data ` +
+    `(iterating on one failing test: printf 'test(/<pattern>/)\\n' > .tilt-test-focus && tilt trigger test-engine-focus reruns only those on the same artifacts; the full run is still the gate) ` +
     `(Tilt's warm engine loop); coverage for "${card}" (supported:true, ` +
     `gap_count:0 -> set coverageSupported from its "ok"/"FAIL" line); ` +
     `cargo semantic-audit (0 findings for "${card}" -> set semanticAuditClean); ` +

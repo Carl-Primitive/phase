@@ -918,7 +918,7 @@ grep -n "^704.5a" docs/MagicCompRules.txt   # Verify SBA rule
 - [ ] Runtime discriminating test when the change claims runtime behavior (see `/card-test`): parser shape tests alone are acceptable ONLY when unsupported semantics remain honestly `Unimplemented`/red in coverage
 - [ ] Snapshot tests: `oracle_ir/snapshot_tests.rs` (IR + lowered parity, insta), plus per-module `snapshot_tests.rs` in `oracle_static/`
 - [ ] `cargo coverage` — Unimplemented count should decrease
-- [ ] Verify per CLAUDE.md § "Canonical verification pattern" — `cargo fmt --all`, then `./scripts/tilt-wait.sh --timeout 900 clippy test-engine card-data` (Tilt down? start `tilt up -- engine` and wait — no direct-cargo fallback, it would be a second full engine build); for a card, `./scripts/verify-card.sh "<Card Name>"` does all of this plus coverage, semantic-audit and Gate A.
+- [ ] Verify per CLAUDE.md § "Canonical verification pattern" — `cargo fmt --all`, then `./scripts/tilt-wait.sh --timeout 900 clippy test-engine card-data` (Tilt down? start `tilt up -- engine` and wait — no direct-cargo fallback, it would be a second full engine build); for a card, `./scripts/verify-card.sh "<Card Name>"` does all of this plus coverage, semantic-audit and Gate A. Iterating on one failing test of your own? `printf 'test(/<pattern>/)\n' > .tilt-test-focus && tilt trigger test-engine-focus` reruns only the matching tests on the same artifacts (`tilt logs test-engine-focus`); the full `test-engine` run at the final tree is still the gate.
 
 ### 9b. Adding a New Effect Type
 

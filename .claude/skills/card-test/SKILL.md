@@ -169,6 +169,12 @@ fn my_card_does_the_thing() {
 
 ## Hard rules
 
+- **Iterate on the focused runner, prove on the full one.** While a test you
+  are writing is red, `printf 'test(/<pattern>/)\n' > .tilt-test-focus && tilt trigger test-engine-focus`
+  reruns only the matching tests on Tilt's existing artifacts (`tilt logs
+  test-engine-focus`). It is also the cheap way to run the revert check
+  (foot-gun 6). The full `test-engine` run at the final tree is still the
+  gate; never cite a focus run as completion evidence.
 - **Never call the raw `resolve()` stack function directly.** Drive through the
   `apply()` pipeline (via `runner.cast(..).resolve()` or `runner.act(..)`).
   Calling `stack::resolve_top` / `effect::resolve` directly bypasses the

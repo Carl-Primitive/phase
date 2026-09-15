@@ -341,7 +341,7 @@ Deliverables
 4. CR annotations grep-verified.
 5. Verification gate (Tilt-preferred; see CLAUDE.md § "Canonical verification pattern"):
    - `cargo fmt --all` (always direct)
-   - `./scripts/verify-card.sh "<card 1>" "<card 2>" ...` for the tier's target cards — tilt-wait on `clippy test-engine card-data` (Tilt down? start `tilt up -- engine`; no direct-cargo fallback), per-card coverage (`supported:true gap_count:0`), `cargo semantic-audit` (no findings for the target cards), Gate A.
+   - `./scripts/verify-card.sh "<card 1>" "<card 2>" ...` for the tier's target cards — tilt-wait on `clippy test-engine card-data` (Tilt down? start `tilt up -- engine`; no direct-cargo fallback), per-card coverage (`supported:true gap_count:0`), `cargo semantic-audit` (no findings for the target cards), Gate A. Iterating on one failing test of your own? `printf 'test(/<pattern>/)\n' > .tilt-test-focus && tilt trigger test-engine-focus` reruns only the matching tests on the same artifacts (`tilt logs test-engine-focus`); the full `test-engine` run at the final tree is still the gate.
 6. Commit message: `feat(engine): <SET> Tier <N>.<M> — <one-line primitive>\n\n<body>`.
    Do not amend prior commits.
 

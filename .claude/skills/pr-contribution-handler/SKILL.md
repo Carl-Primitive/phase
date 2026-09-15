@@ -449,6 +449,7 @@ For Rust/engine/parser changes, verify through Tilt (start `tilt up -- engine` i
 ```bash
 # Tilt down? start it (`tilt up -- engine`) and wait — a direct cargo run is a second full engine build.
 ./scripts/tilt-wait.sh --timeout 900 clippy test-engine card-data
+# one failing test of your own? printf 'test(/<pattern>/)\n' > .tilt-test-focus && tilt trigger test-engine-focus   (same artifacts, only those tests; full test-engine is still the gate)
 ```
 
 For frontend changes:

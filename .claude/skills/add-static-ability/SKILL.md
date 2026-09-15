@@ -262,7 +262,7 @@ If your static uses a mode other than `Continuous`, it's evaluated outside the l
 - [ ] Layer test: create objects with static definitions, run `evaluate_layers()`, assert final characteristics — at least one assertion must FAIL if the change is reverted; a parser test alone is a shape test (see `/card-test`, including the vacuous-negative rule for any "static NOT active" assertion)
 - [ ] Condition test: verify static is active/inactive based on condition (if conditional)
 - [ ] Snapshot test: update `crates/engine/tests/oracle_parser.rs` if card parsing changed
-- [ ] Verify per CLAUDE.md § "Canonical verification pattern" — `cargo fmt --all`, then `./scripts/tilt-wait.sh --timeout 900 clippy test-engine card-data` (Tilt down? start `tilt up -- engine` and wait — no direct-cargo fallback, it would be a second full engine build); for a card, `./scripts/verify-card.sh "<Card Name>"` does all of this plus coverage, semantic-audit and Gate A.
+- [ ] Verify per CLAUDE.md § "Canonical verification pattern" — `cargo fmt --all`, then `./scripts/tilt-wait.sh --timeout 900 clippy test-engine card-data` (Tilt down? start `tilt up -- engine` and wait — no direct-cargo fallback, it would be a second full engine build); for a card, `./scripts/verify-card.sh "<Card Name>"` does all of this plus coverage, semantic-audit and Gate A. Iterating on one failing test of your own? `printf 'test(/<pattern>/)\n' > .tilt-test-focus && tilt trigger test-engine-focus` reruns only the matching tests on the same artifacts (`tilt logs test-engine-focus`); the full `test-engine` run at the final tree is still the gate.
 
 ---
 

@@ -17,8 +17,8 @@ correctly and answers wrongly on a real board.
 Probes run through Tilt, never through a second build: no direct cargo, no isolated `CARGO_TARGET_DIR`,
 no second worktree — each is a second cold build of the engine crate. Write the probe as a throwaway
 `crates/engine/tests/integration/probe_<topic>.rs` (plus its `mod` line) in the watched checkout, let
-Tilt's `test-engine` run it, read it back with `./scripts/tilt-wait.sh test-engine` and
-`tilt logs test-engine --since 10m | grep -A 30 probe_<topic>`, and delete both before reporting (the
+Tilt's focused runner execute just it — `printf 'test(/probe_<topic>/)\n' > .tilt-test-focus && tilt trigger test-engine-focus` — read it back with
+`tilt logs test-engine-focus --since 10m | grep -A 30 probe_<topic>`, and delete both before reporting (the
 `engine-planner` skill's Step 3.5 has the full recipe). Serialize behind any active implementation
 executor and any in-flight probe build; if `tilt-wait.sh` answers 3 or the box is saturated by a cold
 loop, say what you could not measure and which test buys it, rather than falling back to cargo.

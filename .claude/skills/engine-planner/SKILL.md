@@ -127,9 +127,11 @@ worktree — is a second cold build of the ~1.7M-line engine crate, the cost the
 remove. A probe is therefore a throwaway integration test in the watched checkout: write it as
 `crates/engine/tests/integration/probe_<topic>.rs` with a `mod probe_<topic>;` line in
 `tests/integration/main.rs`, print the marker values with `eprintln!`, let Tilt's `test-engine` resource
-pick it up, and read the result with `./scripts/tilt-wait.sh test-engine` followed by
-`tilt logs test-engine --since 10m | grep -A 30 probe_<topic>` (nextest prints a failed test's stderr, so
-end the probe with `panic!("probe done")` after printing when you want its output shown). Delete the
+pick it up — but run it through the focused runner, not the full suite: `printf 'test(/probe_<topic>/)\n' > .tilt-test-focus && tilt trigger test-engine-focus`, then read
+`tilt logs test-engine-focus --since 10m | grep -A 30 probe_<topic>` (same artifacts as `test-engine`,
+only your probe executes; nextest prints a failed test's stderr, so end the probe with
+`panic!("probe done")` after printing when you want its output shown). The full `test-engine` run the
+same edit retriggers is irrelevant to the probe; do not wait on it. Delete the
 file and the `mod` line before the plan is handed back — a probe never enters the candidate. Only one
 agent may edit the watched checkout at a time: probe only when no implementation executor is active and
 never while another probe's build is in flight (a second edit restarts the build). Exit 3 from
