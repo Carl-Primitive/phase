@@ -1,0 +1,7 @@
+[package]
+name = "phase-oracle-lex"
+version = "0.1.0"
+edition = "2021"
+description = "Oracle text lexer: text -> token stream with spans."
+
+[dependencies]

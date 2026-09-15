@@ -1,0 +1,10 @@
+[package]
+name = "phase-oracle-parse"
+version = "0.1.0"
+edition = "2021"
+description = "Grammar over the Oracle token stream -> card schema."
+
+[dependencies]
+phase-card-schema = { path = "../phase-card-schema" }
+phase-oracle-lex = { path = "../phase-oracle-lex" }
+nom = "8.0"
