@@ -126,7 +126,8 @@ use crate::types::ability::{
     StaticCondition, StaticDefinition, StepSkipTarget, SubAbilityLink, TapStateChange,
     TargetFilter, TargetSelectionMode, ThisWayCause, TrackedAnaphorSource, TriggerCondition,
     TriggerDefinition, TurnGate, TypeFilter, TypedFilter, UnlessPayModifier, UnloweredGuard,
-    UntilCondition, WheneverEventExpiry, ZoneChoiceCandidateSource, ZoneChoiceChooser, ZoneOwner,
+    UntilCondition, VoteSubject, WheneverEventExpiry, ZoneChoiceCandidateSource, ZoneChoiceChooser,
+    ZoneOwner,
 };
 // `DoubleTarget` has no production use in this module since the counter-doubling
 // discriminator moved to `Effect::is_counter_multiplication()`; the child
@@ -6308,16 +6309,42 @@ struct ClassifiedCounterChoiceList<'a> {
 /// a distributed item is valid only when that name is followed by the complete
 /// singular or plural counter noun. This keeps bare noun disjunctions from
 /// reaching the counter-choice branch builder.
-fn parse_full_counter_noun(input: &str) -> Option<(CounterType, QuantityExpr)> {
-    let (count, rest) = parse_count_expr(input.trim())?;
-    let (rest, counter_type) = nom_primitives::parse_counter_type_typed(rest.trim_start()).ok()?;
+fn parse_full_counter_noun(
+    input: &str,
+    shared_count: Option<&QuantityExpr>,
+) -> Option<(CounterType, QuantityExpr)> {
+    // Attempt 1: the disjunct carries its own count ("two charge counters", "a
+    // +1/+1 counter").
+    if let Some((count, rest)) = parse_count_expr(input.trim()) {
+        if let Ok((rest, counter_type)) =
+            nom_primitives::parse_counter_type_typed(rest.trim_start())
+        {
+            if all_consuming(alt((
+                tag::<_, _, OracleError<'_>>("counters"),
+                tag("counter"),
+            )))
+            .parse(rest.trim_start())
+            .is_ok()
+            {
+                return Some((counter_type, count));
+            }
+        }
+    }
+    // Attempt 2 (CR 608.2h): the disjunct names no count of its own, but the
+    // clause supplied a shared leading count up front ("put THAT MANY +1/+1
+    // counters or charge counters on …" — Dismantle). Parse the bare
+    // "<type> counter(s)" noun and use the shared count.
+    // `parse_counter_type_typed` still gates a real counter type, exactly as in
+    // Attempt 1.
+    let shared = shared_count?;
+    let (rest, counter_type) = nom_primitives::parse_counter_type_typed(input.trim()).ok()?;
     all_consuming(alt((
         tag::<_, _, OracleError<'_>>("counters"),
         tag("counter"),
     )))
     .parse(rest.trim_start())
     .ok()?;
-    Some((counter_type, count))
+    Some((counter_type, shared.clone()))
 }
 
 /// CR 122.1b: keyword counters distribute over a single shared noun. Recognize
@@ -6361,6 +6388,7 @@ fn recognize_shared_noun_counter_list(input: &str) -> Option<Vec<&str>> {
 fn parse_counter_choice_list_entries(
     shape: ChoiceListShape,
     items: &[&str],
+    shared_count: Option<&QuantityExpr>,
 ) -> Option<Vec<(CounterType, QuantityExpr)>> {
     if items.len() < 2 || items.iter().any(|item| item.trim().is_empty()) {
         return None;
@@ -6371,7 +6399,7 @@ fn parse_counter_choice_list_entries(
         .map(|item| match shape {
             // CR 122.1: full counter noun phrase ("a +1/+1 counter", "two
             // charge counters"). Parse count then counter type from the remainder.
-            ChoiceListShape::Distributed => parse_full_counter_noun(item.trim()),
+            ChoiceListShape::Distributed => parse_full_counter_noun(item.trim(), shared_count),
             // CR 122.1b: bare keyword name ("first strike"); count is one.
             ChoiceListShape::FromAmong | ChoiceListShape::SharedNoun => {
                 let (_rest, counter_type) =
@@ -6387,10 +6415,13 @@ fn parse_counter_choice_list_entries(
 /// Classify a counter-choice list and parse every member for the classified
 /// shape. This is the single authority for the priority order and guards shared
 /// by context-free callers and the branch-reparsing parser.
-fn classify_counter_choice_list(input: &str) -> Option<ClassifiedCounterChoiceList<'_>> {
+fn classify_counter_choice_list<'a>(
+    input: &'a str,
+    shared_count: Option<&QuantityExpr>,
+) -> Option<ClassifiedCounterChoiceList<'a>> {
     if let Ok((rest, _)) = tag::<_, _, OracleError<'_>>("a counter from among ").parse(input) {
         let items = split_choice_list_items(rest)?;
-        let entries = parse_counter_choice_list_entries(ChoiceListShape::FromAmong, &items)?;
+        let entries = parse_counter_choice_list_entries(ChoiceListShape::FromAmong, &items, None)?;
         return Some(ClassifiedCounterChoiceList {
             shape: ChoiceListShape::FromAmong,
             items,
@@ -6403,7 +6434,7 @@ fn classify_counter_choice_list(input: &str) -> Option<ClassifiedCounterChoiceLi
     // recognized counter type; otherwise try the full-noun distributed grammar.
     if let Some(items) = recognize_shared_noun_counter_list(input) {
         if let Some(entries) =
-            parse_counter_choice_list_entries(ChoiceListShape::SharedNoun, &items)
+            parse_counter_choice_list_entries(ChoiceListShape::SharedNoun, &items, None)
         {
             return Some(ClassifiedCounterChoiceList {
                 shape: ChoiceListShape::SharedNoun,
@@ -6414,7 +6445,8 @@ fn classify_counter_choice_list(input: &str) -> Option<ClassifiedCounterChoiceLi
     }
 
     let items = split_choice_list_items(input)?;
-    let entries = parse_counter_choice_list_entries(ChoiceListShape::Distributed, &items)?;
+    let entries =
+        parse_counter_choice_list_entries(ChoiceListShape::Distributed, &items, shared_count)?;
     Some(ClassifiedCounterChoiceList {
         shape: ChoiceListShape::Distributed,
         items,
@@ -6491,7 +6523,7 @@ pub(crate) fn classify_and_parse_counter_choice_list(
     choices_text: &str,
 ) -> Option<Vec<(CounterType, QuantityExpr)>> {
     let lower = choices_text.to_lowercase();
-    Some(classify_counter_choice_list(&lower)?.entries)
+    Some(classify_counter_choice_list(&lower, None)?.entries)
 }
 
 /// CR 122.1b: Parse a bare "from among" counter list ("menace, deathtouch, and
@@ -6503,7 +6535,7 @@ pub(crate) fn classify_and_parse_from_among_counter_list(
 ) -> Option<Vec<(CounterType, QuantityExpr)>> {
     let lower = list_text.to_lowercase();
     let items = split_choice_list_items(&lower)?;
-    parse_counter_choice_list_entries(ChoiceListShape::FromAmong, &items)
+    parse_counter_choice_list_entries(ChoiceListShape::FromAmong, &items, None)
 }
 
 /// CR 122.1a + CR 122.1b: peel an unconditional counter conjunct off the front
@@ -6528,7 +6560,7 @@ fn peel_fixed_counter_conjunct(
     tag::<_, _, OracleError<'_>>("a counter from among ")
         .parse(rest.lower)
         .ok()?;
-    let fixed = parse_full_counter_noun(fixed_tp.lower)?;
+    let fixed = parse_full_counter_noun(fixed_tp.lower, None)?;
     Some((fixed, rest))
 }
 
@@ -6583,6 +6615,37 @@ fn try_parse_put_counter_choice(
 
     let consumed = tp.original.len() - after_choice_original.len();
     let after_choice = TextPair::new(after_choice_original, &tp.lower[consumed..]);
+
+    // CR 608.2h: "put THAT MANY <A> counters or <B> counters on …" — the count
+    // is stated once, up front, and distributes over every disjunct (Dismantle).
+    // Recognize its presence and strip it so classification sees "<A> counters
+    // or <B> counters"; the bare placeholder (EventContextAmount — no event
+    // context exists in a spell Destroy resolution) is rebound to the leading
+    // counter-threshold gate's own QuantityRef by the effect-clause loop once
+    // this clause's condition is known (see the `counter_gate_qty` rebind).
+    let (shared_count, after_choice) =
+        match nom_on_lower(after_choice.original, after_choice.lower, |i| {
+            value(
+                (),
+                (
+                    tag::<_, _, OracleError<'_>>("that many"),
+                    nom::character::complete::multispace1,
+                ),
+            )
+            .parse(i)
+        }) {
+            Some(((), rest_original)) => {
+                let consumed = after_choice.original.len() - rest_original.len();
+                (
+                    Some(QuantityExpr::Ref {
+                        qty: QuantityRef::EventContextAmount,
+                    }),
+                    TextPair::new(rest_original, &after_choice.lower[consumed..]),
+                )
+            }
+            None => (None, after_choice),
+        };
+
     let (choices_tp, target_tp) = after_choice.split_around(" on ")?;
 
     // The conjoined form carries its own marker ("... and a counter from among
@@ -6606,7 +6669,7 @@ fn try_parse_put_counter_choice(
     // Distributed list (Dwarven Armorer's form); `from among` remains reserved
     // for the explicit choice grammar AND for the fixed-conjunct form guarded
     // just below.
-    let classified = classify_counter_choice_list(choices_tp.lower)?;
+    let classified = classify_counter_choice_list(choices_tp.lower, shared_count.as_ref())?;
     let shape = classified.shape;
     if !explicit_choice && fixed_conjunct.is_none() && matches!(shape, ChoiceListShape::FromAmong) {
         return None;
@@ -6631,21 +6694,36 @@ fn try_parse_put_counter_choice(
         Vec::with_capacity(choice_items.len());
     for item in &choice_items {
         // CR 122.1b: FromAmong and SharedNoun name bare keywords, so synthesize
-        // "a <keyword> counter"; Distributed items are already full noun phrases.
+        // "a <keyword> counter"; Distributed items are already full noun
+        // phrases. CR 608.2h: when a shared leading count was recognized above,
+        // a Distributed item carries no count of its own ("charge counters") —
+        // prefix "a " so the reparse below still succeeds via the ordinary
+        // single-count `PutCounter` grammar (a throwaway `Fixed{1}` count); the
+        // real shared `QuantityExpr` is substituted onto the parsed effect
+        // right after, so the dynamic quantity never round-trips through
+        // synthesized text.
         let choice_phrase = match shape {
+            ChoiceListShape::Distributed if shared_count.is_some() => {
+                format!("a {}", item.trim())
+            }
             ChoiceListShape::Distributed => item.trim().to_string(),
             ChoiceListShape::FromAmong | ChoiceListShape::SharedNoun => {
                 format!("a {} counter", item.trim())
             }
         };
         let branch_text = format!("put {choice_phrase} on {target_text}");
-        let clause = parse_effect_clause(&branch_text, ctx);
+        let mut clause = parse_effect_clause(&branch_text, ctx);
         if !matches!(clause.effect, Effect::PutCounter { .. })
             || matches!(clause.effect, Effect::Unimplemented { .. })
             || matches!(clause.effect, Effect::TargetOnly { .. })
         {
             ctx.diagnostics.truncate(diagnostics_snapshot);
             return None;
+        }
+        if let (Some(shared), Effect::PutCounter { count, .. }) =
+            (shared_count.as_ref(), &mut clause.effect)
+        {
+            *count = (*shared).clone();
         }
         branch_clauses.push((clause, format!("put {choice_phrase}")));
     }
@@ -6665,6 +6743,41 @@ fn try_parse_put_counter_choice(
         }
     };
     let shared_multi_target = branch_clauses[0].0.multi_target.take();
+
+    // CR 115.10a + CR 608.2d (P3-B): a recipient is a TARGET only if the text
+    // uses the literal word "target". An untargeted DESCRIBED recipient ("an
+    // artifact you control" — Dismantle) is chosen while the effect resolves,
+    // so it must NOT be lifted to a cast-time `TargetOnly` slot: doing so would
+    // make the spell uncastable whenever the controller has no matching
+    // permanent (ruling 1 — Dismantle targets only the destroyed artifact, not
+    // the recipient). A synthetic "…on target creature you control" DOES say
+    // "target" and keeps the lift; the controller constraint alone is not the
+    // discriminator.
+    //
+    // The positive check is deliberately narrow — `shared_target` must be a
+    // controller-constrained `Typed` filter, not merely "not a context ref".
+    // `!shared_target.is_context_ref()` alone is too broad: a name-based
+    // self-reference ("... on Aragorn") reparses each branch's own "on
+    // Aragorn" fragment to `TargetFilter::Any` in isolation (the per-branch
+    // reparse has no card-name context), and `Any` is not a context ref
+    // either — it would have wrongly suppressed the lift for that card
+    // (measured regression: `choose_one_of_detects_from_among_counter_choice`).
+    // Every shipping `ChooseOneOf`-of-`PutCounter` card's shared recipient is
+    // `ParentTarget`/`ParentTargetSlot` (from an earlier clause) or, for a
+    // name-based anaphor, `Any`/`SelfRef` — none of which is a
+    // controller-constrained `Typed` filter — so this positive check keeps the
+    // lift for all of them without needing to enumerate `is_context_ref()`'s
+    // full variant set.
+    let recipient_is_targeted = shared_multi_target.is_some()
+        || nom_primitives::scan_contains(target_tp.lower.trim(), "target");
+    let recipient_is_described_controller_scoped = matches!(
+        &shared_target,
+        TargetFilter::Typed(TypedFilter {
+            controller: Some(_),
+            ..
+        })
+    );
+    let suppress_lift = !recipient_is_targeted && recipient_is_described_controller_scoped;
 
     // CR 115.6: "up to one target ..." may be announced with ZERO objects, so
     // nothing ever fills the referent (CR 601.2c fixes only WHEN that count is
@@ -6719,13 +6832,33 @@ fn try_parse_put_counter_choice(
     let mut branches: Vec<AbilityDefinition> = Vec::with_capacity(branch_clauses.len());
     for (mut clause, description) in branch_clauses {
         clause.multi_target = None;
-        if names_optional_slot {
-            retarget_put_counter_to_parent_slot(&mut clause.effect, 0);
-        } else {
-            retarget_put_counter_to_parent(&mut clause.effect);
+        // P3-B: an untargeted DESCRIBED recipient keeps its own parsed
+        // `Typed{…}` target — retargeting to `ParentTarget`/`ParentTargetSlot`
+        // is only correct when the recipient was lifted to a shared cast-time
+        // slot (`!suppress_lift`).
+        if !suppress_lift {
+            if names_optional_slot {
+                retarget_put_counter_to_parent_slot(&mut clause.effect, 0);
+            } else {
+                retarget_put_counter_to_parent(&mut clause.effect);
+            }
         }
         let mut def = ability_definition_from_clause(AbilityKind::Spell, clause);
         def.description = Some(description);
+        if suppress_lift {
+            // CR 115.10a + CR 608.2d: `ability_definition_from_clause` does not
+            // propagate `target_choice_timing` (it copies only effect /
+            // sub_ability / duration / condition / optional / multi_target /
+            // distribute), so a branch built here defaults to `Stack`. Stamp it
+            // explicitly — this is what drives the resolution-time recipient
+            // prompt for this branch's `PutCounter` (`needs_resolution_object_choice`
+            // in `game/effects/mod.rs`, gated on `target_choice_timing ==
+            // Resolution`) and what `sub_has_independent_object_target_slot`'s
+            // `choose_one_of_branches_own_object_choice` reads to keep this
+            // `ChooseOneOf` sub from inheriting the destroyed artifact as its
+            // recipient.
+            def.target_choice_timing = crate::types::ability::TargetChoiceTiming::Resolution;
+        }
         // The conjoined form's printed ruling (Elspeth Resplendent, 2022-04-29):
         // "its controller chooses …, then that counter and the +1/+1 counter are
         // placed on the target creature at the same time." The choice therefore
@@ -6754,6 +6887,21 @@ fn try_parse_put_counter_choice(
             def.sub_ability = Some(Box::new(fixed));
         }
         branches.push(def);
+    }
+
+    if suppress_lift {
+        // CR 115.10a + CR 608.2d: the recipient ("an artifact you control") is
+        // chosen while THIS `ChooseOneOf` resolves — return the choice clause
+        // directly, with no `TargetOnly` wrapper. Wrapping it would lift the
+        // recipient to a cast-time slot with no legal candidate when the
+        // controller has no matching permanent, making the whole spell
+        // uncastable (Dismantle ruling 1: it targets only the destroyed
+        // artifact). The leading counter-threshold gate (if any) attaches to
+        // this clause's `condition` in the caller's effect-clause loop.
+        return Some(parsed_clause(Effect::ChooseOneOf {
+            chooser: PlayerFilter::Controller,
+            branches,
+        }));
     }
 
     let mut choice = AbilityDefinition::new(
@@ -24732,6 +24880,28 @@ fn target_filter_can_target_player(filter: &TargetFilter) -> bool {
 /// opponent sacrifices …, discards …, and loses 3 life"; "that player loses 2
 /// life and draws two cards"). The chain parser carries it chunk to chunk and
 /// re-supplies it to each continuation exactly as if it had been printed there.
+///
+/// **Deliberately does NOT cover non-targeted MASS player scopes** ("each
+/// player"/"all players"/"each opponent"/"all opponents"). Those are peeled
+/// off the chunk's leading text before subject-application parsing ever runs
+/// (`clause_shell::peel_player_scope_subject` →
+/// `oracle_effect::lower::strip_each_player_subject`), which stamps the
+/// ability-level `AbilityDefinition.player_scope` instead of producing a
+/// `SubjectApplication` — so `from_leading_subject` never observes an "each
+/// player"/"each opponent" leading subject in practice for the plural forms
+/// that phrase recognizes. A separate, independent carry
+/// (`carried_player_scope` in the chunk loop) re-supplies THAT scope to a
+/// subjectless continuation, mirroring this type's job one layer up (see
+/// `plural_player_subject_scope_carries_across_conjugated_continuations` /
+/// `plural_player_subject_scope_carries_across_then_continuation` in
+/// `subject.rs`'s test module, which lock in that "each opponent sacrifices a creature,
+/// discards a card, and loses 3 life" and "each player loses 1 life and
+/// draws a card" already carry the mass scope end to end). Extending this
+/// enum with an untargeted-filter variant would therefore be dead code for
+/// those two phrases; if a future card's phrasing bypasses
+/// `strip_each_player_subject`'s recognized tags and reaches this type with
+/// an ambiguous mass filter, the fix belongs in the upstream player/opponent
+/// noun recognition that produces `SubjectApplication.affected`, not here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CarriedPlayerSubject {
     /// CR 601.2c: a declared player target is chosen once, at announcement, for
@@ -31838,6 +32008,391 @@ fn resolve_difference_anaphor_in_effect(effect: &mut Effect, bound: Option<&Quan
     }
 }
 
+/// CR 608.2h: rebind a bare `EventContextAmount` "that many" count placeholder
+/// in a `PutCounter` effect to the concrete `QuantityRef` a leading
+/// counter-threshold gate measured. Sibling of
+/// `resolve_difference_anaphor_in_effect` above — same call site, same
+/// `effective_condition` read — but a ONE-operand counter-gate operand rather
+/// than a two-operand difference.
+///
+/// The descent below is the UNION of `resolve_difference_anaphor_in_effect`'s
+/// carrier set (`CreateDrawReplacement` / `CreateDelayedTrigger`) and every
+/// other `Effect` variant that nests an `AbilityDefinition`/`Effect` payload
+/// (`ChooseOneOf`, `CreatePlaneswalkReplacement`, `Vote`, `SeparateIntoPiles`,
+/// `RevealFromHand`, `FlipCoin`/`FlipCoins`/`FlipCoinUntilLose`, `RollDie`) —
+/// mirroring the carrier classification `ability_visit::visit_effect_scoped`
+/// uses as the engine's single authority for "which variants own a nested
+/// ability/effect". A placeholder can land inside any of these, not only a
+/// direct `PutCounter` or a `ChooseOneOf` branch: Dismantle's "put that many
+/// +1/+1 counters or charge counters …" lowers to a `ChooseOneOf` of two
+/// `PutCounter` branches, but an equally-shaped counter-gated body nested
+/// inside e.g. a delayed trigger's payload needs the identical rebind before
+/// that payload is stored for later resolution — CR 603.7a fixes a delayed
+/// trigger's effect at creation time, using current game state, so "that
+/// many" must be baked in now or it resolves as zero with no triggering event
+/// amount live during a later, separate resolution.
+///
+/// Wildcard-free — mirrors `ability_visit`'s module-level convention
+/// (`visit_effect_scoped`'s own doc: "a new variant on any of those [...]
+/// enums is a compile error here, which forces a descend-or-leaf decision at
+/// the one place that owns the answer"). A newly added `Effect` variant is
+/// therefore a compile error here too, not a silent no-op through a `_`
+/// wildcard. The leaf-arm enumeration below is `ability_visit::
+/// visit_effect_scoped`'s own "Nested-ability carriers — descend" complement,
+/// copied verbatim as the single source of truth for "which variants carry
+/// NO nested ability/effect at all" — except five variants
+/// (`GenericEffect`, `Token`, `CreateEmblem`, `AddTargetReplacement`,
+/// `Counter`) that module treats as conditionally-descended CR 611.2/614.1
+/// boundary carriers (their granted statics/replacements belong to ANOTHER
+/// object's future resolution, gated there by `ResolutionScope`). This
+/// function has no such scope parameter because it always operates in the
+/// "bake in now" mode CR 608.2h requires — but that mode does not reach past
+/// those five either: a static/replacement grant they carry attaches to a
+/// DIFFERENT object's independent lifecycle, not a value snapshot of THIS
+/// resolution, so they are leaves here too, explicitly listed alongside the
+/// module's own leaf set below rather than folded into it silently.
+fn rebind_event_context_amount_counts(effect: &mut Effect, gate_qty: &QuantityRef) {
+    match effect {
+        Effect::PutCounter { count, .. } => {
+            if matches!(
+                count,
+                QuantityExpr::Ref {
+                    qty: QuantityRef::EventContextAmount
+                }
+            ) {
+                *count = QuantityExpr::Ref {
+                    qty: gate_qty.clone(),
+                };
+            }
+        }
+        Effect::ChooseOneOf { branches, .. } => {
+            for branch in branches {
+                rebind_event_context_amount_counts_in_ability(branch, gate_qty);
+            }
+        }
+        // CR 614.11 / CR 614.1a: a one-shot draw or planeswalk replacement
+        // nests its substitute `Effect` — bake the gate's count into it now,
+        // matching `resolve_difference_anaphor_in_effect`'s sibling rewrite.
+        Effect::CreateDrawReplacement { replacement_effect }
+        | Effect::CreatePlaneswalkReplacement { replacement_effect } => {
+            rebind_event_context_amount_counts(replacement_effect, gate_qty);
+        }
+        // CR 603.7a: a delayed trigger's payload is fixed at creation time.
+        Effect::CreateDelayedTrigger { effect: inner, .. } => {
+            rebind_event_context_amount_counts_in_ability(inner, gate_qty);
+        }
+        Effect::Vote {
+            per_choice_effect,
+            subject,
+            ..
+        } => {
+            for sub in per_choice_effect {
+                rebind_event_context_amount_counts_in_ability(sub, gate_qty);
+            }
+            if let VoteSubject::Objects {
+                outcome_template, ..
+            } = subject
+            {
+                rebind_event_context_amount_counts_in_ability(outcome_template, gate_qty);
+            }
+        }
+        Effect::SeparateIntoPiles {
+            chosen_pile_effect,
+            unchosen_pile_effect,
+            ..
+        } => {
+            rebind_event_context_amount_counts_in_ability(chosen_pile_effect, gate_qty);
+            if let Some(unchosen) = unchosen_pile_effect {
+                rebind_event_context_amount_counts_in_ability(unchosen, gate_qty);
+            }
+        }
+        Effect::RevealFromHand {
+            on_decline: Some(sub),
+            ..
+        } => {
+            rebind_event_context_amount_counts_in_ability(sub, gate_qty);
+        }
+        Effect::RevealFromHand {
+            on_decline: None, ..
+        } => {}
+        Effect::FlipCoin {
+            win_effect,
+            lose_effect,
+            ..
+        }
+        | Effect::FlipCoins {
+            win_effect,
+            lose_effect,
+            ..
+        } => {
+            if let Some(sub) = win_effect {
+                rebind_event_context_amount_counts_in_ability(sub, gate_qty);
+            }
+            if let Some(sub) = lose_effect {
+                rebind_event_context_amount_counts_in_ability(sub, gate_qty);
+            }
+        }
+        Effect::FlipCoinUntilLose { win_effect } => {
+            rebind_event_context_amount_counts_in_ability(win_effect, gate_qty);
+        }
+        Effect::RollDie { results, .. } => {
+            for branch in results {
+                rebind_event_context_amount_counts_in_ability(&mut branch.effect, gate_qty);
+            }
+        }
+        // Leaves that `ability_visit::visit_effect_scoped` treats as its own
+        // explicit (non-leaf-list) fieldless/no-op arms — copied here for the
+        // same reasons that module gives them.
+        Effect::Intensify { .. }
+        | Effect::ApplyPerpetual { .. }
+        | Effect::Heist { .. }
+        | Effect::HeistExile
+        | Effect::Conjure { .. }
+        | Effect::Meld { .. }
+        | Effect::DraftFromSpellbook { .. }
+        | Effect::TurnFaceUp { .. }
+        | Effect::TurnFaceDown { .. } => {}
+        // BOUNDARY CARRIERS this rebind never crosses (see the function doc):
+        // each grants a static/replacement to ANOTHER object's independent
+        // future resolution, not a value snapshot of the CURRENT one.
+        Effect::GenericEffect { .. }
+        | Effect::Token { .. }
+        | Effect::CreateEmblem { .. }
+        | Effect::AddTargetReplacement { .. }
+        | Effect::Counter { .. } => {}
+        // Leaf effects with no nested ability/effect carrier — verbatim from
+        // `ability_visit::visit_effect_scoped`'s own leaf-arm enumeration.
+        Effect::StartYourEngines { .. }
+        | Effect::ChangeSpeed { .. }
+        | Effect::DealDamage { .. }
+        | Effect::ApplyPostReplacementDamage { .. }
+        | Effect::EachDealsDamageEqualToPower { .. }
+        | Effect::EachSourceDealsDamage { .. }
+        | Effect::Draw { .. }
+        | Effect::Pump { .. }
+        | Effect::PairWith { .. }
+        | Effect::Destroy { .. }
+        | Effect::Regenerate { .. }
+        | Effect::RemoveAllDamage { .. }
+        | Effect::CounterAll { .. }
+        | Effect::GainLife { .. }
+        | Effect::LoseLife { .. }
+        | Effect::ExchangeLifeWithStat { .. }
+        | Effect::ExchangeLifeTotals { .. }
+        | Effect::SetTapState { .. }
+        | Effect::RemoveCounter { .. }
+        | Effect::Sacrifice { .. }
+        | Effect::DiscardCard { .. }
+        | Effect::Mill { .. }
+        | Effect::Scry { .. }
+        | Effect::PumpAll { .. }
+        | Effect::DamageAll { .. }
+        | Effect::DamageEachPlayer { .. }
+        | Effect::DestroyAll { .. }
+        | Effect::ChangeZone { .. }
+        | Effect::ChangeZoneAll { .. }
+        | Effect::Dig { .. }
+        | Effect::GainControl { .. }
+        | Effect::GainControlAll { .. }
+        | Effect::ControlNextTurn { .. }
+        | Effect::Attach { .. }
+        | Effect::UnattachAll { .. }
+        | Effect::Surveil { .. }
+        | Effect::Fight { .. }
+        | Effect::Bounce { .. }
+        | Effect::BounceAll { .. }
+        | Effect::Explore
+        | Effect::ExploreAll { .. }
+        | Effect::Investigate
+        | Effect::Tribute { .. }
+        | Effect::TimeTravel
+        | Effect::BecomeMonarch { .. }
+        | Effect::NoOp
+        | Effect::Proliferate
+        | Effect::ProliferateTarget { .. }
+        | Effect::EndTheTurn
+        | Effect::EndCombatPhase
+        | Effect::Populate
+        | Effect::Clash
+        | Effect::Behold { .. }
+        | Effect::SwitchPT { .. }
+        | Effect::CopySpell { .. }
+        | Effect::EpicCopy { .. }
+        | Effect::CastCopyOfCard { .. }
+        | Effect::CopyTokenOf { .. }
+        | Effect::CreateTokenCopyFromPool { .. }
+        | Effect::Myriad
+        | Effect::Encore
+        | Effect::ExileHaunting { .. }
+        | Effect::HideawayConceal { .. }
+        | Effect::CopyTokenBlockingAttacker { .. }
+        | Effect::BecomeCopy { .. }
+        | Effect::ChoosePermanent { .. }
+        | Effect::GainActivatedAbilitiesOfTarget { .. }
+        | Effect::ChooseCard { .. }
+        | Effect::PutCounterAll { .. }
+        | Effect::MultiplyCounter { .. }
+        | Effect::ChooseCounterAdjustment { .. }
+        | Effect::DoublePT { .. }
+        | Effect::DoublePTAll { .. }
+        | Effect::MoveCounters { .. }
+        | Effect::Animate { .. }
+        | Effect::RegisterBending { .. }
+        | Effect::Cleanup { .. }
+        | Effect::Mana { .. }
+        | Effect::Discard { .. }
+        | Effect::Shuffle { .. }
+        | Effect::Transform { .. }
+        | Effect::FlipPermanent { .. }
+        | Effect::SearchLibrary { .. }
+        | Effect::SearchOutsideGame { .. }
+        | Effect::OpenBoosterPack { .. }
+        | Effect::RevealHand { .. }
+        | Effect::Reveal { .. }
+        | Effect::RevealTop { .. }
+        | Effect::ExileTop { .. }
+        | Effect::ExileFaceDownPile { .. }
+        | Effect::TargetOnly { .. }
+        | Effect::Choose { .. }
+        | Effect::OpponentGuess { .. }
+        | Effect::SwapChosenLabels { .. }
+        | Effect::RevealChosenNumbers { .. }
+        | Effect::ChooseDamageSource { .. }
+        | Effect::Suspect { .. }
+        | Effect::Unsuspect { .. }
+        | Effect::Connive { .. }
+        | Effect::PhaseOut { .. }
+        | Effect::PhaseIn { .. }
+        | Effect::ForceBlock { .. }
+        | Effect::ForceAttack { .. }
+        | Effect::SolveCase
+        | Effect::BecomePrepared { .. }
+        | Effect::BecomeUnprepared { .. }
+        | Effect::BecomeSaddled { .. }
+        | Effect::BecomeBlocked { .. }
+        | Effect::SetClassLevel { .. }
+        | Effect::AddRestriction { .. }
+        | Effect::ReduceNextSpellCost { .. }
+        | Effect::GrantNextSpellAbility { .. }
+        | Effect::AddPendingETBCounters { .. }
+        | Effect::AddPendingEntersModifications { .. }
+        | Effect::PayCost { .. }
+        | Effect::CastFromZone { .. }
+        | Effect::FreeCastFromZones { .. }
+        | Effect::ExileResolvingSpellInsteadOfGraveyard { .. }
+        | Effect::PreventDamage { .. }
+        | Effect::LoseTheGame { .. }
+        | Effect::WinTheGame { .. }
+        | Effect::RingTemptsYou
+        | Effect::VentureIntoDungeon
+        | Effect::VentureInto { .. }
+        | Effect::TakeTheInitiative
+        | Effect::ArrangePlanarDeckTop { .. }
+        | Effect::Planeswalk
+        | Effect::ChaosEnsues
+        | Effect::RedistributeLifeTotals
+        | Effect::ReverseTurnOrder
+        | Effect::OpenAttractions { .. }
+        | Effect::RollToVisitAttractions
+        | Effect::AssembleContraptions { .. }
+        | Effect::AssembleContraptionsFromRollDifference
+        | Effect::CrankContraptions { .. }
+        | Effect::ReassembleContraption { .. }
+        | Effect::AssembleContraptionOnSprocket { .. }
+        | Effect::ReassembleContraptionOnSprocket { .. }
+        | Effect::PutSticker { .. }
+        | Effect::ApplySticker { .. }
+        | Effect::ProcessRadCounters
+        | Effect::GrantCastingPermission { .. }
+        | Effect::ChooseFromZone { .. }
+        | Effect::RememberCard { .. }
+        | Effect::NoteManaSpent
+        | Effect::ForEachCategory { .. }
+        | Effect::ChooseObjectsIntoTrackedSet { .. }
+        | Effect::ChooseAndSacrificeRest { .. }
+        | Effect::EachPlayerCopyChosen { .. }
+        | Effect::Exploit { .. }
+        | Effect::GainEnergy { .. }
+        | Effect::GivePlayerCounter { .. }
+        | Effect::LoseAllPlayerCounters { .. }
+        | Effect::ExileFromTopUntil { .. }
+        | Effect::RevealUntil { .. }
+        | Effect::Discover { .. }
+        | Effect::Cascade
+        | Effect::Ripple { .. }
+        | Effect::MiracleCast { .. }
+        | Effect::MadnessCast { .. }
+        | Effect::PutAtLibraryPosition { .. }
+        | Effect::ChooseDrawnThisTurnPayOrTopdeck { .. }
+        | Effect::PutOnTopOrBottom { .. }
+        | Effect::GiftDelivery { .. }
+        | Effect::Goad { .. }
+        | Effect::GoadAll { .. }
+        | Effect::Detain { .. }
+        | Effect::SetRoomDoorLock { .. }
+        | Effect::ExchangeControl { .. }
+        | Effect::ChangeTargets { .. }
+        | Effect::Manifest { .. }
+        | Effect::ManifestDread
+        | Effect::Cloak { .. }
+        | Effect::ExtraTurn { .. }
+        | Effect::GrantExtraLoyaltyActivations { .. }
+        | Effect::SkipNextTurn { .. }
+        | Effect::SkipNextStep { .. }
+        | Effect::AdditionalPhase { .. }
+        | Effect::Double { .. }
+        | Effect::RuntimeHandled { .. }
+        | Effect::Incubate { .. }
+        | Effect::Amass { .. }
+        | Effect::Monstrosity { .. }
+        | Effect::Renown { .. }
+        | Effect::Bolster { .. }
+        | Effect::Adapt { .. }
+        | Effect::Learn
+        | Effect::Forage
+        | Effect::CompletePlayerAction { .. }
+        | Effect::Harness
+        | Effect::CollectEvidence { .. }
+        | Effect::Endure { .. }
+        | Effect::BlightEffect { .. }
+        | Effect::Seek { .. }
+        | Effect::SetLifeTotal { .. }
+        | Effect::SetDayNight { .. }
+        | Effect::GiveControl { .. }
+        | Effect::RemoveFromCombat { .. }
+        | Effect::CreateDamageReplacement { .. }
+        | Effect::CombineHost { .. }
+        | Effect::ChooseAugmentAndCombineWithHost { .. }
+        | Effect::ReturnAsAura { .. }
+        | Effect::Specialize
+        | Effect::ChooseCounterKind { .. }
+        | Effect::PutChosenCounter { .. }
+        | Effect::ReproduceEventCounters { .. }
+        | Effect::Unimplemented { .. } => {}
+    }
+}
+
+/// `AbilityDefinition` counterpart of `rebind_event_context_amount_counts` —
+/// mirrors `resolve_difference_anaphor_in_ability`'s recursion into
+/// `sub_ability`/`else_ability`, plus `mode_abilities` (a `ChooseOneOf` branch
+/// or delayed-trigger payload may itself carry a chained sub-ability or a
+/// modal sibling, e.g. the conjoined-counter form).
+pub(crate) fn rebind_event_context_amount_counts_in_ability(
+    def: &mut AbilityDefinition,
+    gate_qty: &QuantityRef,
+) {
+    rebind_event_context_amount_counts(&mut def.effect, gate_qty);
+    if let Some(sub) = def.sub_ability.as_deref_mut() {
+        rebind_event_context_amount_counts_in_ability(sub, gate_qty);
+    }
+    if let Some(els) = def.else_ability.as_deref_mut() {
+        rebind_event_context_amount_counts_in_ability(els, gate_qty);
+    }
+    for mode in &mut def.mode_abilities {
+        rebind_event_context_amount_counts_in_ability(mode, gate_qty);
+    }
+}
+
 /// True when a trigger's intervening-if references the controller gaining life
 /// this turn (Lathiel / Ocelot Pride class).
 pub(crate) fn trigger_condition_references_controller_life_gained(
@@ -37894,6 +38449,23 @@ pub(crate) fn parse_effect_chain_ir(
                 resolve_difference_anaphor_in_effect(&mut clause.effect, Some(&bound));
                 if let Some(sub) = clause.sub_ability.as_deref_mut() {
                     resolve_difference_anaphor_in_ability(sub, Some(&bound));
+                }
+            }
+            // CR 608.2h: sibling of the difference-anaphor bind directly above —
+            // same site, same `effective_condition` read, a one-operand
+            // counter-gate instead of a two-operand difference. "If <X> had <N>
+            // counters …, put THAT MANY … counters …" (Dismantle, Rite of the
+            // Serpent): the "that many" amount IS the quantity the leading
+            // counter-threshold gate just measured. `EventContextAmount` is the
+            // parser's placeholder for it (there is no live event context in a
+            // spell `Destroy` resolution, so left unbound it would resolve to
+            // 0) — rebind it to the gate's own `QuantityRef` so it reads the
+            // chain-root target's counter count instead (live-or-LKI, CR 400.7
+            // + CR 122.2).
+            if let Some(gate_qty) = effective_condition.and_then(conditions::counter_gate_qty) {
+                rebind_event_context_amount_counts(&mut clause.effect, gate_qty);
+                if let Some(sub) = clause.sub_ability.as_deref_mut() {
+                    rebind_event_context_amount_counts_in_ability(sub, gate_qty);
                 }
             }
         }

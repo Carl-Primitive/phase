@@ -51,6 +51,54 @@ pub fn build_resolved_from_def(
     build_resolved_from_def_with_targets(def, source_id, controller, Vec::new())
 }
 
+/// CR 608.2h + CR 603.7a: `build_resolved_from_def`, but propagating the
+/// CREATING ability's `chain_root_targets` onto the built chain (and every
+/// `sub_ability`/`else_ability` link) instead of leaving it at the default
+/// empty list `build_resolved_from_def` always produces.
+///
+/// Single authority for every carrier that materializes a nested
+/// `AbilityDefinition` payload WHILE STILL WITHIN an active resolution chain
+/// that may have stamped `chain_root_targets` — a delayed trigger's payload
+/// (`delayed_trigger::resolve`), a vote's per-choice/outcome effect
+/// (`vote::resolve` and friends), a coin flip's win/lose branch
+/// (`flip_coin::resolve`), and a die-roll result branch
+/// (`roll_die::resolve`). A fresh TOP-LEVEL ability instantiation — a
+/// triggered ability going on the stack, an activated/loyalty ability being
+/// activated, a dungeon room, an Evoke ETB sacrifice — has no ambient
+/// chain-root context to inherit and must keep using the plain
+/// `build_resolved_from_def` above; do not switch those call sites to this
+/// one.
+pub fn build_resolved_from_def_with_chain_root(
+    def: &AbilityDefinition,
+    source_id: ObjectId,
+    controller: PlayerId,
+    chain_root_targets: Vec<TargetRef>,
+) -> ResolvedAbility {
+    build_resolved_from_def_with_targets_and_chain_root(
+        def,
+        source_id,
+        controller,
+        Vec::new(),
+        chain_root_targets,
+    )
+}
+
+/// `build_resolved_from_def_with_chain_root`, but also supplying the already
+/// selected root targets — the general case for a carrier whose payload has
+/// its own known recipient (`flip_coin`/`roll_die`'s branches, which reuse
+/// the CREATING ability's `targets`) as well as an inherited chain-root list.
+pub fn build_resolved_from_def_with_targets_and_chain_root(
+    def: &AbilityDefinition,
+    source_id: ObjectId,
+    controller: PlayerId,
+    targets: Vec<TargetRef>,
+    chain_root_targets: Vec<TargetRef>,
+) -> ResolvedAbility {
+    let mut resolved = build_resolved_from_def_with_targets(def, source_id, controller, targets);
+    resolved.set_chain_root_targets_recursive(chain_root_targets);
+    resolved
+}
+
 /// CR 601.2b + CR 602.2b: publish an announce-time-locked X onto an ability being
 /// announced. **Single computation authority** for the announce-locked X channel.
 ///
