@@ -8,17 +8,42 @@
 use nom::{Compare, CompareResult, Input, Needed};
 use phase_oracle_lex::{Token, TokenKind};
 
+/// Where in a card's structure the tokens being parsed came from.
+///
+/// Carried on the stream because a few productions are genuinely ambiguous
+/// without it. "That creature" means the target an earlier clause chose inside
+/// a SPELL body, and the object the event was about inside a TRIGGER body —
+/// same words, different referent, and no amount of looking at the words
+/// themselves can tell them apart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Ctx {
+    pub in_trigger: bool,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Tokens<'a> {
     pub toks: &'a [Token],
     /// The text the tokens index into, so a production can read a word's
     /// spelling without the lexer having to allocate one string per token.
     pub src: &'a str,
+    pub ctx: Ctx,
 }
 
 impl<'a> Tokens<'a> {
     pub fn new(toks: &'a [Token], src: &'a str) -> Self {
-        Self { toks, src }
+        Self {
+            toks,
+            src,
+            ctx: Ctx::default(),
+        }
+    }
+
+    /// The same tokens, parsed as a trigger's body.
+    pub fn in_trigger(self) -> Self {
+        Self {
+            ctx: Ctx { in_trigger: true },
+            ..self
+        }
     }
 
     pub fn first(&self) -> Option<&'a Token> {
@@ -40,6 +65,7 @@ impl<'a> Tokens<'a> {
         Tokens {
             toks: &self.toks[n.min(self.toks.len())..],
             src: self.src,
+            ctx: self.ctx,
         }
     }
 
@@ -62,6 +88,7 @@ impl<'a> Input for Tokens<'a> {
         Tokens {
             toks: &self.toks[..index],
             src: self.src,
+            ctx: self.ctx,
         }
     }
 
@@ -69,6 +96,7 @@ impl<'a> Input for Tokens<'a> {
         Tokens {
             toks: &self.toks[index..],
             src: self.src,
+            ctx: self.ctx,
         }
     }
 
@@ -78,10 +106,12 @@ impl<'a> Input for Tokens<'a> {
             Tokens {
                 toks: b,
                 src: self.src,
+                ctx: self.ctx,
             },
             Tokens {
                 toks: a,
                 src: self.src,
+                ctx: self.ctx,
             },
         )
     }

@@ -25,8 +25,8 @@ pub mod target;
 pub mod trigger;
 
 use phase_oracle_ast::{
-    AbilityCost, AbilityDefinition, AbilityKind, ActivationRestriction, CardOutput, Effect,
-    Keyword, SubAbilityLink, TriggerDefinition,
+    AbilityCost, AbilityDefinition, AbilityKind, AbilityTag as ActivationTag,
+    ActivationRestriction, CardOutput, Effect, Keyword, SubAbilityLink, TriggerDefinition,
 };
 use phase_oracle_lex::{lex, Token, TokenKind};
 
@@ -153,8 +153,18 @@ fn parse_line(l: &Line<'_>, src: &str) -> Result<Lowered, Decline> {
     // engine does not keep it even in the description, and stripping it here
     // means every production below reads the sentence it introduces rather than
     // needing its own leading-label arm.
-    if let Some(inner) = strip_ability_word(l, src) {
-        return parse_line(&inner, src);
+    if let Some((inner, tag)) = strip_ability_word(l, src) {
+        let lowered = parse_line(&inner, src)?;
+        // A few of these labels are not pure flavour: they name a CLASS of
+        // ability that other cards refer to ("activate a boast ability"), so
+        // the engine keeps a tag even though it drops the word.
+        return Ok(match (lowered, tag) {
+            (Lowered::Ability(mut a), Some(t)) => {
+                a.ability_tag = Some(t);
+                Lowered::Ability(a)
+            }
+            (other, _) => other,
+        });
     }
 
     // CR 702.5 / CR 702.6: a keyword line that carries an ARGUMENT.
@@ -187,10 +197,12 @@ fn static_description(line: &str) -> String {
             continue;
         };
         // Measured, and not a rule anyone would guess: the engine keeps the
-        // word before a bare "creatures" (76 of 100 keeps) and drops it before
-        // anything else — a subtype, a colour, "permanents" (257 drops). The
-        // exclusion itself survives either way in the filter's `Another`
-        // property, so only the prose differs.
+        // word immediately before a bare "creatures" (76 of 100 keeps) and
+        // drops it before anything else — a subtype, a colour, "permanents"
+        // (257 drops). A more elaborate reading that also kept it before
+        // "legendary creatures" and "untapped creatures" scored WORSE, so the
+        // simple one stands. The exclusion itself survives in the filter's
+        // `Another` property either way; only the prose differs.
         if rest.starts_with("creatures") || rest.starts_with("creature ") {
             return line.to_string();
         }
@@ -205,7 +217,14 @@ fn static_description(line: &str) -> String {
 /// real sentence after it. Two shapes are deliberately NOT stripped: a chapter
 /// head ("I —", "II, III —"), whose numeral is structural, and a modal header
 /// ("Choose one —"), which has nothing after the dash on its own line.
-fn strip_ability_word<'a>(l: &Line<'a>, src: &str) -> Option<Line<'a>> {
+/// Labels that are printed like an ability word but name a referable class.
+const TAGGED_ABILITY_WORDS: &[(&str, ActivationTag)] = &[
+    ("boast", ActivationTag::Boast),
+    ("exhaust", ActivationTag::Exhaust),
+    ("power-up", ActivationTag::PowerUp),
+];
+
+fn strip_ability_word<'a>(l: &Line<'a>, src: &str) -> Option<(Line<'a>, Option<ActivationTag>)> {
     let dash = l.toks.iter().position(|t| t.kind == TokenKind::EmDash)?;
 
     // Magic's templating separates an ability WORD from its sentence with a
@@ -238,12 +257,24 @@ fn strip_ability_word<'a>(l: &Line<'a>, src: &str) -> Option<Line<'a>> {
         return None;
     }
 
-    Some(Line {
-        toks: rest,
-        description: line::render(rest, src),
-        start: rest.first().expect("non-empty").span.start,
-        end: rest.last().expect("non-empty").span.end,
-    })
+    let tag = (label.len() == 1)
+        .then(|| label[0].text(src).to_lowercase())
+        .and_then(|w| {
+            TAGGED_ABILITY_WORDS
+                .iter()
+                .find(|(name, _)| *name == w)
+                .map(|(_, t)| *t)
+        });
+
+    Some((
+        Line {
+            toks: rest,
+            description: line::render(rest, src),
+            start: rest.first().expect("non-empty").span.start,
+            end: rest.last().expect("non-empty").span.end,
+        },
+        tag,
+    ))
 }
 
 /// CR 714.2: a Saga chapter head, which must not be mistaken for flavour.
@@ -407,7 +438,7 @@ fn triggered_line(l: &Line<'_>, src: &str) -> Result<TriggerDefinition, Decline>
         Err(_) => (body, false),
     };
 
-    let parts = effect_chain(body.toks, src)
+    let parts = effect_chain_in(body.toks, src, true)
         .ok_or_else(|| decline(l, "trigger_effect", DeclineReason::UnknownVerb))?;
 
     let mut execute = line::assemble(AbilityKind::Spell, None, parts.effects, String::new())
@@ -509,6 +540,11 @@ struct Chain {
 /// one refusal fails the line, because a partially-understood ability is worse
 /// than an honestly declined one.
 fn effect_chain(toks: &[Token], src: &str) -> Option<Chain> {
+    effect_chain_in(toks, src, false)
+}
+
+/// Lower a run of tokens, saying which structure they came from.
+fn effect_chain_in(toks: &[Token], src: &str, in_trigger: bool) -> Option<Chain> {
     let mut effects: Vec<line::Part> = Vec::new();
     let mut facts = effect::ClauseFacts::default();
     let mut statics = Vec::new();
@@ -535,7 +571,7 @@ fn effect_chain(toks: &[Token], src: &str) -> Option<Chain> {
             }
         }
 
-        let p = line::sentence_effects(sent, src)?;
+        let p = line::sentence_effects(sent, src, in_trigger)?;
         sentence_count += 1;
         facts = facts.merge(p.facts);
         if let Some(sa) = p.standalone {

@@ -1444,3 +1444,112 @@ fn a_pronoun_subject_declines_because_its_referent_is_not_local() {
     );
     assert!(!p.is_complete());
 }
+
+// ---------------------------------------------------------------------------
+// Parse context: the same words, two referents
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_back_reference_resolves_in_a_spell_body_and_declines_in_a_trigger() {
+    // "That creature" means the target an earlier clause chose inside a SPELL
+    // body. Inside a TRIGGER it means the object the event was about, which the
+    // engine spells three different ways depending on the event
+    // (`TriggeringSource`, `EventTarget`, `ParentTarget`). Picking one would be
+    // a guess, so the trigger declines and the gap stays visible.
+    let spell = abilities(
+        "Burning Cloak",
+        "Target creature gets +2/+0 until end of turn. ~ deals 2 damage to that creature.",
+    );
+    assert_eq!(
+        spell[0]["sub_ability"]["effect"]["target"],
+        json!({"type": "ParentTarget"})
+    );
+
+    let trigger = parse_card(
+        "Dinosaur Hunter",
+        "Whenever this creature deals damage to a Dinosaur, destroy that creature.",
+    );
+    assert!(!trigger.is_complete());
+}
+
+#[test]
+fn a_positional_subtype_must_also_be_a_real_subtype() {
+    // "Goblin creature" and "that creature" have the SAME shape: a word before
+    // a core type. Position alone once made "destroy that creature" parse as a
+    // creature of subtype "That", which is exactly the kind of silent wrong
+    // answer the vocabulary check exists to stop.
+    let real = abilities("Whatever", "Destroy target Goblin creature.");
+    assert_eq!(
+        real[0]["effect"]["target"]["type_filters"],
+        json!(["Creature", {"Subtype": "Goblin"}])
+    );
+
+    // "that creature" takes the back-reference reading, NOT a creature of
+    // subtype "That" — which is what position alone used to produce.
+    let back_ref = abilities("Whatever", "Destroy that creature.");
+    assert_eq!(
+        back_ref[0]["effect"]["target"],
+        json!({"type": "ParentTarget"})
+    );
+}
+
+#[test]
+fn one_grant_verb_can_carry_a_list_of_keywords() {
+    // "gains lifelink and hexproof" is ONE grant of two keywords, not two
+    // grants — the verb is printed once.
+    let v = abilities(
+        "Whatever",
+        "Target creature gets +2/+2 and gains lifelink and hexproof until end of turn.",
+    );
+    assert_eq!(
+        v[0]["effect"]["static_abilities"][0]["modifications"],
+        json!([
+            {"type": "AddPower", "value": 2},
+            {"type": "AddToughness", "value": 2},
+            {"type": "AddKeyword", "keyword": "Lifelink"},
+            {"type": "AddKeyword", "keyword": "Hexproof"}
+        ])
+    );
+}
+
+#[test]
+fn a_conjunction_that_names_a_new_subject_is_a_new_clause() {
+    // "target player loses 4 life AND YOU GAIN 4 life" switches subject, so it
+    // is a second clause. Contrast the keyword case above, where the subject
+    // carries and the whole thing stays one clause.
+    let v = abilities(
+        "Whatever",
+        "Target player loses 4 life and you gain 4 life.",
+    );
+    assert_eq!(v[0]["effect"]["type"], "LoseLife");
+    assert_eq!(v[0]["effect"]["target"], json!({"type": "Player"}));
+    assert_eq!(v[0]["sub_ability"]["effect"]["type"], "GainLife");
+    // GainLife by the controller omits its player field entirely.
+    assert!(v[0]["sub_ability"]["effect"].get("player").is_none());
+}
+
+#[test]
+fn a_tagged_ability_word_keeps_its_tag_but_loses_its_word() {
+    // CR 702.142b: "boast" and friends look like ability words but name a
+    // CLASS of ability other cards refer to, so the engine drops the word from
+    // the prose and keeps a tag.
+    let v = abilities(
+        "Aerial Doombot",
+        "Power-up — {5}{U}: Put three +1/+1 counters on ~.",
+    );
+    assert_eq!(v[0]["ability_tag"], json!({"type": "PowerUp"}));
+    assert_eq!(
+        v[0]["description"],
+        "{5}{U}: Put three +1/+1 counters on ~."
+    );
+
+    // An untagged ability word leaves nothing behind.
+    let plain = triggers(
+        "Whatever",
+        "Magecraft — Whenever you cast a spell, draw a card.",
+    );
+    assert_eq!(
+        plain[0]["description"],
+        "Whenever you cast a spell, draw a card."
+    );
+}

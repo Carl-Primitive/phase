@@ -195,8 +195,13 @@ pub const DURATION_OWNER: usize = 0;
 ///
 /// "then" is the printed marker for a continuation step, so a sentence that
 /// carries one produces two linked definitions rather than declining.
-pub fn sentence_effects(toks: &[Token], src: &str) -> Option<SentenceParse> {
+pub fn sentence_effects(toks: &[Token], src: &str, in_trigger: bool) -> Option<SentenceParse> {
     let stream = Tokens::new(toks, src);
+    let stream = if in_trigger {
+        stream.in_trigger()
+    } else {
+        stream
+    };
     let (rest, effects, facts, inner_dur, standalone) = parse_effect_chain(stream)?;
     // A duration already consumed by a subject clause governs the whole
     // sentence; a trailing one applies to an imperative that had none.

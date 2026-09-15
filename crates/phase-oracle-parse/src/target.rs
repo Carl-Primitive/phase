@@ -248,12 +248,17 @@ fn typed_filter(i: In<'_>) -> R<'_, TypedFilter> {
         i = i.take_from_n(1);
     }
 
-    // A word immediately before a core type word is a subtype: "Goblin creature".
+    // A word immediately before a core type word is a subtype: "Goblin
+    // creature". POSITION alone is not enough — "that creature" and "another
+    // creature" have the same shape — so the candidate must also be a real
+    // subtype (CR 205.3). Before that check, "destroy that creature" parsed as
+    // a creature of subtype "That".
     if let Some(w) = i.first_word() {
         if core_type(&w).is_none() {
             let next = i.take_from_n(1);
-            if next.first_word().is_some_and(|n| core_type(&n).is_some()) {
-                f.type_filters.push(TypeFilter::Subtype(capitalized(&w)));
+            let followed_by_type = next.first_word().is_some_and(|n| core_type(&n).is_some());
+            if let (true, Some(name)) = (followed_by_type, crate::subtypes::singular_of(&w)) {
+                f.type_filters.push(TypeFilter::Subtype(name.to_string()));
                 i = next;
             }
         }
@@ -614,8 +619,12 @@ fn player_target(i: In<'_>) -> R<'_, Subject> {
     if crate::prim::any_of(&["it", "they", "them"])(i).is_ok() {
         return fail(i);
     }
-    // "that creature" / "that permanent" refer back to the object already
-    // chosen by an earlier clause of the same ability (CR 601.2c).
+    // "that creature" / "that permanent" refer back to the object an earlier
+    // clause of the same ability chose (CR 601.2c) — but ONLY in a spell body.
+    // Inside a trigger the same words mean the object the EVENT was about, and
+    // the engine spells that three different ways (`TriggeringSource`,
+    // `EventTarget`, `ParentTarget`) depending on the event. Picking one would
+    // be a guess, so a trigger body declines here and the gap stays visible.
     const BACK_REFS: &[(&str, ())] = &[
         ("that creature", ()),
         ("that permanent", ()),
@@ -625,6 +634,9 @@ fn player_target(i: In<'_>) -> R<'_, Subject> {
         ("that card", ()),
     ];
     if let Ok((r, _)) = phrase_alt(BACK_REFS)(i) {
+        if i.ctx.in_trigger {
+            return fail(i);
+        }
         return Ok((r, Subject::single(TargetFilter::ParentTarget)));
     }
     // CR 201.5: "this card" is a self-reference the engine deliberately does

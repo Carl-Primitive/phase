@@ -47,6 +47,11 @@ pub enum AbilityTag {
     Equip,
     Fortify,
     Reconfigure,
+    /// CR 702.142b and friends: keyword-ish labels printed like ability words
+    /// but naming a class of ability that other cards refer to.
+    Boast,
+    Exhaust,
+    PowerUp,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
