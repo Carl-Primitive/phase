@@ -203,6 +203,10 @@ pub enum TargetFilter {
     TriggeringPlayer,
     Another,
     Single,
+    /// CR 111.1 + CR 601: an object on the stack that is a spell. "Target
+    /// spell" names this, NOT a card type — a spell is a zone-dependent object
+    /// and has no type-line spelling.
+    StackSpell,
     StackAbility,
     Typed(TypedFilter),
     Not {

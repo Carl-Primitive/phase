@@ -42,12 +42,13 @@ impl SubAbilityLink {
 
 /// CR 602.5d and friends: when an activated ability may be activated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type")]
 pub enum ActivationRestriction {
     AsSorcery,
-    OncePerTurn,
-    OnlyDuringYourTurn,
-    OnlyDuringCombat,
-    OnlyDuringUpkeep,
+    OnlyOnceEachTurn,
+    OnlyOnce,
+    DuringYourTurn,
+    DuringYourUpkeep,
 }
 
 /// How long a continuous effect lasts. CR 611.2.

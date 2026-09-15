@@ -605,8 +605,15 @@ fn choice_timing(s: &Subject) -> Option<ChoiceTiming> {
 /// Recover the origin zone a filter already names, so a `return` production
 /// does not have to parse "from your graveyard" twice.
 fn subject_zone(f: &TargetFilter) -> Option<ZoneName> {
-    let TargetFilter::Typed(t) = f else {
-        return None;
+    // A disjunction carries the same zone on every branch once the trailing
+    // qualifier has been distributed, so any branch answers for all:
+    // "target instant or sorcery card from your graveyard".
+    let t = match f {
+        TargetFilter::Typed(t) => t,
+        TargetFilter::Or { filters } | TargetFilter::And { filters } => {
+            return filters.iter().find_map(subject_zone)
+        }
+        _ => return None,
     };
     t.properties.iter().find_map(|p| match p {
         phase_oracle_ast::FilterProp::InZone { zone } => Some(match zone {
@@ -685,12 +692,15 @@ fn predicate<'a>(s: &Subject, i: In<'a>) -> R<'a, Predicate> {
     if let Ok((r, _)) = any_of(&["loses", "lose"])(i) {
         let (r, q) = quantity(r)?;
         let (r, _) = word("life")(r)?;
+        // Unlike `GainLife`, the engine PRINTS the subject here even when it is
+        // the controller. The two life effects genuinely disagree about this;
+        // the mirror follows each of them rather than tidying either.
         return Ok((
             r,
             Predicate::Instant(
                 Effect::LoseLife {
                     amount: q,
-                    target: implicit_controller(&s.filter),
+                    target: Some(s.filter.clone()),
                 },
                 ClauseFacts::of(s),
             ),
@@ -941,9 +951,19 @@ pub fn subject_clause(i: In<'_>) -> R<'_, ClauseParse> {
         None => (rest, None),
     };
 
-    let (effects, standalone, facts) =
+    let (mut effects, standalone, facts) =
         lower_predicates(&s, preds, dur.clone(), &printed, &printed_subject);
     let facts = facts.merge(ClauseFacts::iterated(&printed_subject));
+
+    // CR 101.4: when `player_scope` names who acts, the effect's own player
+    // slot is redundant and the engine leaves it out.
+    if facts.player_scope.is_some() {
+        for e in &mut effects {
+            if let Effect::LoseLife { target, .. } = e {
+                *target = None;
+            }
+        }
+    }
     Ok((
         rest,
         ClauseParse {

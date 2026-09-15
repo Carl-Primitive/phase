@@ -23,7 +23,8 @@ pub mod target;
 pub mod trigger;
 
 use phase_oracle_ast::{
-    AbilityCost, AbilityDefinition, AbilityKind, CardOutput, SubAbilityLink, TriggerDefinition,
+    AbilityCost, AbilityDefinition, AbilityKind, ActivationRestriction, CardOutput, SubAbilityLink,
+    TriggerDefinition,
 };
 use phase_oracle_lex::{lex, Token, TokenKind};
 
@@ -184,16 +185,81 @@ fn activated_line(l: &Line<'_>, src: &str, colon: usize) -> Result<AbilityDefini
         return Err(decline(l, "ability_cost", DeclineReason::UnparsedCost));
     };
 
+    // CR 602.5d and friends: a trailing "Activate only ..." sentence states
+    // WHEN the ability may be activated, not what it does, so it is lifted off
+    // the body before the effect grammar sees it.
+    let (body, restrictions) = split_activation_restrictions(body, src);
+
     let parts = effect_chain(body, src)
         .ok_or_else(|| decline(l, "activated_effect", DeclineReason::UnknownVerb))?;
 
-    line::assemble(
+    let mut a = line::assemble(
         AbilityKind::Activated,
         Some(cost),
         parts.effects,
         l.description.clone(),
     )
-    .ok_or_else(|| decline(l, "assemble", DeclineReason::UnknownLineShape))
+    .ok_or_else(|| decline(l, "assemble", DeclineReason::UnknownLineShape))?;
+    // CR 606.3: a loyalty ability may be activated only when its controller
+    // could cast a sorcery. The restriction is inherent to the cost, not
+    // printed on the card, so it is derived rather than parsed.
+    let mut restrictions = restrictions;
+    if matches!(a.cost, Some(AbilityCost::Loyalty { .. })) && restrictions.is_empty() {
+        restrictions.push(ActivationRestriction::AsSorcery);
+    }
+    a.activation_restrictions = restrictions;
+    Ok(a)
+}
+
+/// Split a trailing "Activate only ..." sentence off an ability's body.
+///
+/// An UNRECOGNIZED "Activate only ..." is deliberately left in the body, so the
+/// line declines rather than quietly losing a timing restriction. That is the
+/// totality rule applied to a field rather than to a clause.
+fn split_activation_restrictions<'a>(
+    body: &'a [Token],
+    src: &str,
+) -> (&'a [Token], Vec<ActivationRestriction>) {
+    const TABLE: &[(&str, ActivationRestriction)] = &[
+        (
+            "activate only as a sorcery",
+            ActivationRestriction::AsSorcery,
+        ),
+        (
+            "activate this ability only as a sorcery",
+            ActivationRestriction::AsSorcery,
+        ),
+        (
+            "activate only once each turn",
+            ActivationRestriction::OnlyOnceEachTurn,
+        ),
+        (
+            "activate only during your turn",
+            ActivationRestriction::DuringYourTurn,
+        ),
+        (
+            "activate only during your upkeep",
+            ActivationRestriction::DuringYourUpkeep,
+        ),
+    ];
+
+    let sentences = line::sentences(body);
+    let Some(last) = sentences.last() else {
+        return (body, Vec::new());
+    };
+    let Ok((rest, restriction)) = prim::phrase_alt(TABLE)(Tokens::new(last, src)) else {
+        return (body, Vec::new());
+    };
+    if !line::is_exhausted(rest) {
+        return (body, Vec::new());
+    }
+
+    let cut = last.first().map(|t| t.span.start).unwrap_or(0);
+    let keep = body
+        .iter()
+        .position(|t| t.span.start >= cut)
+        .unwrap_or(body.len());
+    (&body[..keep], vec![restriction])
 }
 
 /// `<trigger event>, <effect>` — a triggered ability. CR 603.

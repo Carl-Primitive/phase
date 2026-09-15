@@ -66,24 +66,63 @@ fn phase_name(i: In<'_>) -> R<'_, PhaseName> {
 fn phase_head(i: In<'_>) -> R<'_, TriggerHead> {
     let (r, _) = phrase("at the beginning of")(i)?;
 
-    // Possessive axis, as one alternation rather than one arm per step.
-    let (r, constraint) = if let Ok((r2, _)) = word("your")(r) {
-        (r2, Some(json!({"type": "OnlyDuringYourTurn"})))
-    } else if let Ok((r2, _)) = phrase("each player's")(r) {
-        (r2, None)
-    } else if let Ok((r2, _)) = phrase("each opponent's")(r) {
-        (r2, None)
-    } else if let Ok((r2, _)) = word("the")(r) {
-        (r2, None)
-    } else {
-        (r, None)
+    // Possessive axis, as ONE alternation rather than one arm per step. The
+    // possessive is not decoration: it is what makes the trigger fire on one
+    // player's turn rather than on everyone's.
+    let (r, mut constraint) = match whose(r) {
+        Some(v) => v,
+        None => (r, None),
     };
 
     let (r, phase) = phase_name(r)?;
+
+    // "at the beginning of combat ON YOUR TURN" — the possessive can also be
+    // printed AFTER the step, and it means the same thing. Read here so both
+    // orders reach one representation instead of two.
+    let r = match trailing_whose(r) {
+        Some((r2, c)) => {
+            if constraint.is_none() {
+                constraint = c;
+            }
+            r2
+        }
+        None => r,
+    };
+
     let mut h = TriggerHead::mode(TriggerMode::Phase);
     h.phase = Some(phase);
     h.constraint = constraint;
     Ok((r, h))
+}
+
+/// A possessive printed BEFORE the step: "your upkeep", "each player's upkeep".
+fn whose(i: In<'_>) -> Option<(In<'_>, Option<serde_json::Value>)> {
+    if let Ok((r, _)) = word("your")(i) {
+        return Some((r, Some(json!({"type": "OnlyDuringYourTurn"}))));
+    }
+    if let Ok((r, _)) = phrase("each opponent's")(i) {
+        return Some((r, Some(json!({"type": "OnlyDuringOpponentsTurn"}))));
+    }
+    const ANY_TURN: &[(&str, ())] = &[("each player's", ()), ("the", ())];
+    if let Ok((r, _)) = phrase_alt(ANY_TURN)(i) {
+        return Some((r, None));
+    }
+    None
+}
+
+/// A possessive printed AFTER the step: "combat on your turn".
+fn trailing_whose(i: In<'_>) -> Option<(In<'_>, Option<serde_json::Value>)> {
+    let (r, _) = phrase("on")(i).ok()?;
+    if let Ok((r2, _)) = phrase("your turn")(r) {
+        return Some((r2, Some(json!({"type": "OnlyDuringYourTurn"}))));
+    }
+    if let Ok((r2, _)) = phrase("each opponent's turn")(r) {
+        return Some((r2, Some(json!({"type": "OnlyDuringOpponentsTurn"}))));
+    }
+    if let Ok((r2, _)) = phrase("each turn")(r) {
+        return Some((r2, None));
+    }
+    None
 }
 
 /// The object a `when`/`whenever` head watches.

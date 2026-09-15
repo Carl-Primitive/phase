@@ -305,7 +305,10 @@ fn typed_filter_list(i: In<'_>) -> R<'_, TargetFilter> {
     // source from every alternative — "sacrifice another creature or artifact"
     // means another of either. Stripping it here rather than inside
     // `typed_filter` is what makes the distribution automatic.
-    let (i, another) = match word("another")(i) {
+    // CR 109.5: "another" and "other" are the same exclusion, printed with the
+    // singular and plural noun respectively ("another creature" / "other
+    // creatures"), so one flag serves both.
+    let (i, another) = match any_of(&["another", "other"])(i) {
         Ok((r, _)) => (r, true),
         Err(_) => (i, false),
     };
@@ -384,6 +387,26 @@ fn propagate_trailing_qualifier(parts: &mut [TargetFilter]) {
             }
         }
     }
+}
+
+/// An object on the stack: "spell", or "<types> spell".
+///
+/// CR 111.1: a spell is a zone-dependent object, not a card type, so it has no
+/// type-line spelling. The engine names it `StackSpell` and conjoins any type
+/// restriction with `And` rather than putting "spell" in `type_filters`.
+fn spell_on_the_stack(i: In<'_>) -> R<'_, TargetFilter> {
+    if let Ok((r, _)) = any_of(&["spell", "spells"])(i) {
+        return Ok((r, TargetFilter::StackSpell));
+    }
+    // "<type list> spell" — the types restrict WHAT KIND of spell.
+    let (r, types) = typed_filter_list(i)?;
+    let (r, _) = any_of(&["spell", "spells"])(r)?;
+    Ok((
+        r,
+        TargetFilter::And {
+            filters: vec![TargetFilter::StackSpell, types],
+        },
+    ))
 }
 
 /// A player reference that is not an object. CR 102.1.
@@ -520,6 +543,16 @@ pub fn subject(i: In<'_>) -> R<'_, Subject> {
         _ => (i, false),
     };
     if let Ok((r, _)) = word("target")(i) {
+        if let Ok((r2, f)) = spell_on_the_stack(r) {
+            return Ok((
+                r2,
+                Subject {
+                    filter: f,
+                    scope: Scope::Single,
+                    targeted: true,
+                },
+            ));
+        }
         let (r, mut f) = typed_filter_list(r)?;
         if another {
             add_prop(&mut f, FilterProp::Another);

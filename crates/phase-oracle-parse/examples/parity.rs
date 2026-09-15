@@ -58,6 +58,9 @@ fn main() {
     let mut regressions = 0usize;
     let mut declined_lines = 0usize;
     let mut by_production: BTreeMap<&'static str, usize> = BTreeMap::new();
+    // Every Nth decline per production, so the sample spans the corpus instead
+    // of being the first twenty cards alphabetically.
+    let mut decline_samples: BTreeMap<&'static str, Vec<String>> = BTreeMap::new();
     let mut by_head: BTreeMap<String, usize> = BTreeMap::new();
     let mut mismatch_bucket: BTreeMap<&'static str, usize> = BTreeMap::new();
     let mut examples: Vec<String> = Vec::new();
@@ -71,7 +74,14 @@ fn main() {
 
         for d in &p.declines {
             declined_lines += 1;
-            *by_production.entry(d.production).or_default() += 1;
+            let seen = by_production.entry(d.production).or_default();
+            *seen += 1;
+            if *seen % 97 == 1 {
+                let bucket = decline_samples.entry(d.production).or_default();
+                if bucket.len() < 20 {
+                    bucket.push(d.text.chars().take(100).collect());
+                }
+            }
             let head = d
                 .text
                 .split_whitespace()
@@ -225,5 +235,15 @@ fn main() {
 
     for e in &examples {
         println!("\n{e}");
+    }
+
+    if std::env::var("PARITY_SAMPLE_DECLINES").is_ok() {
+        println!("\ndecline samples by production:");
+        for (prod, lines) in &decline_samples {
+            println!("\n== {prod} ==");
+            for l in lines.iter().take(20) {
+                println!("   {l}");
+            }
+        }
     }
 }

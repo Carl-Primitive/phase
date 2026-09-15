@@ -863,3 +863,133 @@ fn the_mass_zone_change_carries_fewer_fields_than_the_single_one() {
     assert_eq!(all[0]["effect"]["type"], "ChangeZoneAll");
     assert!(all[0]["effect"].get("enter_tapped").is_none());
 }
+
+// ---------------------------------------------------------------------------
+// Spells on the stack, timing, and the life-effect asymmetry
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_spell_is_a_stack_object_not_a_card_type() {
+    // CR 111.1: a spell is zone-dependent and has no type-line spelling, so
+    // "target spell" can never be a `type_filters` entry.
+    let bare = abilities("Counterspell", "Counter target spell.");
+    assert_eq!(
+        bare[0]["effect"],
+        json!({"type": "Counter", "target": {"type": "StackSpell"}})
+    );
+
+    // A type restriction CONJOINS with the stack-object filter.
+    let typed = abilities("Whatever", "Counter target creature spell.");
+    let t = &typed[0]["effect"]["target"];
+    assert_eq!(t["type"], "And");
+    assert_eq!(t["filters"][0], json!({"type": "StackSpell"}));
+    assert_eq!(t["filters"][1]["type_filters"], json!(["Creature"]));
+}
+
+#[test]
+fn other_and_another_are_the_same_exclusion() {
+    // CR 109.5. They differ only in the number of the noun they modify.
+    let plural = parsed("Whatever", "Other black creatures get +1/+1.")["static_abilities"].clone();
+    assert_eq!(
+        plural[0]["affected"]["properties"],
+        json!([{"type": "HasColor", "color": "Black"}, {"type": "Another"}])
+    );
+}
+
+#[test]
+fn a_step_possessive_can_be_printed_before_or_after_the_step() {
+    // "your upkeep" and "combat on your turn" mean the same restriction and
+    // must reach one representation.
+    let before = triggers("Whatever", "At the beginning of your upkeep, draw a card.");
+    let after = triggers(
+        "Whatever",
+        "At the beginning of combat on your turn, draw a card.",
+    );
+    assert_eq!(
+        before[0]["constraint"],
+        json!({"type": "OnlyDuringYourTurn"})
+    );
+    assert_eq!(
+        after[0]["constraint"],
+        json!({"type": "OnlyDuringYourTurn"})
+    );
+    assert_eq!(after[0]["phase"], "BeginCombat");
+}
+
+#[test]
+fn an_activation_restriction_is_lifted_off_the_effect_body() {
+    // CR 602.5d: "Activate only as a sorcery" says WHEN, not what.
+    let v = abilities("Whatever", "{T}: Draw a card. Activate only as a sorcery.");
+    assert_eq!(
+        v[0]["activation_restrictions"],
+        json!([{"type": "AsSorcery"}])
+    );
+    assert_eq!(v[0]["effect"]["type"], "Draw");
+    assert_eq!(
+        v[0]["sub_ability"],
+        json!(null),
+        "the restriction is not a second effect"
+    );
+}
+
+#[test]
+fn an_unrecognized_activation_restriction_declines_instead_of_vanishing() {
+    // Leaving it in the body is the totality rule applied to a FIELD: a timing
+    // restriction the grammar cannot express must not be silently dropped.
+    let p = parse_card(
+        "Whatever",
+        "{T}: Draw a card. Activate only if you control a Forest.",
+    );
+    assert!(!p.is_complete());
+    assert!(p.out.abilities.is_empty());
+}
+
+#[test]
+fn a_loyalty_ability_is_sorcery_speed_without_the_card_saying_so() {
+    // CR 606.3. Inherent to the cost, so it is derived rather than parsed.
+    let v = abilities(
+        "Domri, City Smasher",
+        "[-3]: ~ deals 3 damage to any target.",
+    );
+    assert_eq!(v[0]["cost"], json!({"type": "Loyalty", "amount": -3}));
+    assert_eq!(
+        v[0]["activation_restrictions"],
+        json!([{"type": "AsSorcery"}])
+    );
+}
+
+#[test]
+fn the_two_life_effects_disagree_about_printing_their_subject() {
+    // GainLife OMITS the controller; LoseLife PRINTS it. The engine is
+    // inconsistent here and the mirror follows each of them rather than
+    // tidying either — a like-for-like replacement cannot smuggle in a fix.
+    let v = abilities("Whatever", "You gain 10 life.\nYou lose 10 life.");
+    assert_eq!(
+        v[0]["effect"],
+        json!({"type": "GainLife", "amount": {"type": "Fixed", "value": 10}})
+    );
+    assert_eq!(
+        v[0]["sub_ability"]["effect"],
+        json!({
+            "type": "LoseLife",
+            "amount": {"type": "Fixed", "value": 10},
+            "target": {"type": "Controller"}
+        })
+    );
+}
+
+#[test]
+fn an_iterated_clause_leaves_its_player_slot_empty() {
+    // CR 101.4: `player_scope` already names who acts, so the effect's own
+    // player slot would be saying it twice.
+    let v = triggers(
+        "Whatever",
+        "Whenever ~ attacks, each opponent loses 3 life.",
+    );
+    let e = &v[0]["execute"];
+    assert_eq!(
+        e["effect"],
+        json!({"type": "LoseLife", "amount": {"type": "Fixed", "value": 3}})
+    );
+    assert_eq!(e["player_scope"], json!({"type": "Opponent"}));
+}
