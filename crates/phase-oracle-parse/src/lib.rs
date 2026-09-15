@@ -183,9 +183,18 @@ fn parse_line(l: &Line<'_>, src: &str) -> Result<Lowered, Decline> {
 /// this is what the engine does, verified across the corpus.
 fn static_description(line: &str) -> String {
     for prefix in ["Other ", "other "] {
-        if let Some(rest) = line.strip_prefix(prefix) {
-            return rest.to_string();
+        let Some(rest) = line.strip_prefix(prefix) else {
+            continue;
+        };
+        // Measured, and not a rule anyone would guess: the engine keeps the
+        // word before a bare "creatures" (76 of 100 keeps) and drops it before
+        // anything else — a subtype, a colour, "permanents" (257 drops). The
+        // exclusion itself survives either way in the filter's `Another`
+        // property, so only the prose differs.
+        if rest.starts_with("creatures") || rest.starts_with("creature ") {
+            return line.to_string();
         }
+        return rest.to_string();
     }
     line.to_string()
 }

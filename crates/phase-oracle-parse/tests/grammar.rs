@@ -1381,13 +1381,39 @@ fn a_bare_subtype_needs_no_type_word() {
     let elves = parsed("Canopy Tactician", "Other Elves you control get +1/+1.")
         ["static_abilities"]
         .clone();
+    // A STATIC ability's `affected` slot spells out the implied type line; an
+    // effect's `target` slot does not. Measured: 620 to 106 one way, 636 to
+    // 108 the other. Same printed words, two slots, two shapes.
     assert_eq!(
         elves[0]["affected"]["type_filters"],
-        json!([{"Subtype": "Elf"}])
+        json!(["Creature", {"Subtype": "Elf"}])
     );
-    // The exclusion survives in the filter, so the engine drops the word from
-    // the prose.
+    // The exclusion survives in the filter, so the prose drops the word.
     assert_eq!(elves[0]["description"], "Elves you control get +1/+1.");
+}
+
+#[test]
+fn other_survives_in_the_prose_only_before_a_bare_creatures() {
+    // Not a rule anyone would guess, and not one the parser invented: the
+    // engine keeps the word 76 times out of 100 before "creatures" and drops
+    // it 257 times before a subtype, a colour or "permanents".
+    let kept = parsed(
+        "Aang, Air Nomad",
+        "Other creatures you control have vigilance.",
+    )["static_abilities"]
+        .clone();
+    assert_eq!(
+        kept[0]["description"],
+        "Other creatures you control have vigilance."
+    );
+
+    let dropped = parsed("Whatever", "Other red creatures you control get +1/+1.")
+        ["static_abilities"]
+        .clone();
+    assert_eq!(
+        dropped[0]["description"],
+        "red creatures you control get +1/+1."
+    );
 }
 
 #[test]

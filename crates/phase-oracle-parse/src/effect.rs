@@ -687,11 +687,18 @@ fn predicate<'a>(s: &Subject, i: In<'a>) -> R<'a, Predicate> {
                 ));
             }
         }
-        if let Ok((r2, (pascal, _printed))) = keyword_word(r) {
+        // "gains flying and first strike" — ONE grant of several keywords, not
+        // several grants. The verb is printed once, so the list is read here
+        // rather than by the outer conjunction, which would look for a second
+        // "gains" that is not there.
+        if let Ok((r2, keywords)) = keyword_list(r) {
             return Ok((
                 r2,
                 Predicate::Continuous {
-                    modifications: vec![Modification::AddKeyword { keyword: pascal }],
+                    modifications: keywords
+                        .into_iter()
+                        .map(|keyword| Modification::AddKeyword { keyword })
+                        .collect(),
                 },
             ));
         }
@@ -878,6 +885,31 @@ pub fn landwalk(w: &str) -> Option<&'static str> {
     })
 }
 
+/// One or more keywords joined by "and" or commas, after a single grant verb.
+fn keyword_list(i: In<'_>) -> R<'_, Vec<String>> {
+    let (mut rest, (first, _)) = keyword_word(i)?;
+    let mut out = vec![first];
+    loop {
+        let after_comma = match rest.first() {
+            Some(t) if t.kind == phase_oracle_lex::TokenKind::Comma => rest.take_from_n(1),
+            _ => rest,
+        };
+        let after_and = match word("and")(after_comma) {
+            Ok((r, _)) => r,
+            Err(_) if after_comma != rest => after_comma,
+            Err(_) => break,
+        };
+        match keyword_word(after_and) {
+            Ok((r, (kw, _))) => {
+                out.push(kw);
+                rest = r;
+            }
+            Err(_) => break,
+        }
+    }
+    Ok((rest, out))
+}
+
 /// One keyword, yielding the engine's PascalCase name and the printed spelling.
 ///
 /// Both are needed: the modification carries "FirstStrike" while the static
@@ -1040,7 +1072,8 @@ fn lower_predicates(
         // A continuous change with no printed end, on an object the text did
         // not target, is the permanent's own static ability.
         let standalone = if duration.is_none() && !printed_subject.targeted {
-            let mut sa = StaticAbility::continuous(affected.clone(), mods.clone());
+            let mut sa =
+                StaticAbility::continuous(spell_out_type_line(affected.clone()), mods.clone());
             sa.description = None;
             Some(sa)
         } else {
@@ -1134,4 +1167,25 @@ fn infinitive(printed: &str) -> String {
         }
     }
     printed.to_string()
+}
+
+/// Spell out the type line a bare creature subtype implies.
+///
+/// POSITIONAL, and measured: a static ability's `affected` slot carries
+/// `[Creature, Subtype(Elf)]` 620 times against 106 without, while an effect's
+/// `target` slot carries the bare `[Subtype(Spirit)]` 636 times against 108
+/// with. Same printed words, two slots, two shapes — so the expansion happens
+/// where the static is BUILT rather than where the filter is parsed.
+fn spell_out_type_line(f: TargetFilter) -> TargetFilter {
+    let TargetFilter::Typed(mut t) = f else {
+        return f;
+    };
+    let bare_creature_subtype = t.type_filters.len() == 1
+        && matches!(&t.type_filters[0],
+            phase_oracle_ast::TypeFilter::Subtype(s) if crate::subtypes::is_creature_type(s));
+    if bare_creature_subtype {
+        t.type_filters
+            .insert(0, phase_oracle_ast::TypeFilter::Creature);
+    }
+    TargetFilter::Typed(t)
 }

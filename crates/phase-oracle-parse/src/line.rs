@@ -228,15 +228,20 @@ type ChainOut<'a> = (
 fn parse_effect_chain(i: In<'_>) -> Option<ChainOut<'_>> {
     let (mut rest, mut chain, mut facts, mut dur, standalone) = one_clause(i)?;
     loop {
-        // A continuation is marked by "then", with or without a leading comma.
+        // A continuation is marked by "then" or by "and", with or without a
+        // leading comma. "and" reaches here only when the clause before it has
+        // already refused to reuse its own subject — "target creature gets
+        // +1/+1 and gains flying" is consumed inside one clause, while "target
+        // player loses 4 life AND YOU GAIN 4 life" names a new subject and so
+        // is a second clause.
         let after_comma = match rest.first() {
             Some(t) if t.kind == TokenKind::Comma => rest.take_from_n(1),
             _ => rest,
         };
-        let Ok((after_then, _)) = crate::prim::word("then")(after_comma) else {
+        let Ok((after_join, _)) = crate::prim::any_of(&["then", "and"])(after_comma) else {
             break;
         };
-        match one_clause(after_then) {
+        match one_clause(after_join) {
             Some((r, mut more, f, d, _)) => {
                 chain.append(&mut more);
                 facts = facts.merge(f);
