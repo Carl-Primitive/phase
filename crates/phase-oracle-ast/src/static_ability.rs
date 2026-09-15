@@ -38,12 +38,35 @@ pub enum StaticMode {
     CantUntap,
 }
 
+/// CR 613.1: a game-state predicate that gates a continuous effect.
+///
+/// Typed rather than an untyped blob, for the same reason nothing else here is:
+/// a condition the grammar cannot express must DECLINE, not lower into
+/// something a consumer has to guess about.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum Condition {
+    /// CR 400.1: at least one object matching `filter` exists.
+    IsPresent {
+        filter: TargetFilter,
+    },
+    Not {
+        condition: Box<Condition>,
+    },
+    And {
+        conditions: Vec<Condition>,
+    },
+    Or {
+        conditions: Vec<Condition>,
+    },
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StaticAbility {
     pub mode: StaticMode,
     pub affected: TargetFilter,
     pub modifications: Vec<Modification>,
-    pub condition: Option<serde_json::Value>,
+    pub condition: Option<Condition>,
     pub affected_zone: Option<String>,
     pub effect_zone: Option<String>,
     pub active_zones: Vec<String>,

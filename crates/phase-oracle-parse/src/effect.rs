@@ -823,6 +823,40 @@ fn predicate<'a>(s: &Subject, i: In<'a>) -> R<'a, Predicate> {
     fail(i)
 }
 
+/// `as long as <condition>` — CR 613.1.
+///
+/// Only the presence form is built. A condition the grammar cannot express must
+/// DECLINE rather than lower into something approximate, so an unrecognized
+/// "as long as" leaves its tokens unconsumed and fails the clause's totality
+/// check — which is the same rule the effect grammar follows.
+fn as_long_as(i: In<'_>) -> R<'_, phase_oracle_ast::Condition> {
+    let (r, _) = phrase("as long as")(i)?;
+    let (r, _) = phrase("you control")(r)?;
+    let (r, s) = subject(r)?;
+
+    // "you control X" means X is on the battlefield under your control, so both
+    // halves are recorded: the engine's filter carries the zone explicitly.
+    let TargetFilter::Typed(mut t) = s.filter else {
+        return fail(i);
+    };
+    t.controller = Some(ControllerRef::You);
+    if !t
+        .properties
+        .iter()
+        .any(|p| matches!(p, phase_oracle_ast::FilterProp::InZone { .. }))
+    {
+        t.properties.push(phase_oracle_ast::FilterProp::InZone {
+            zone: phase_oracle_ast::Zone::Battlefield,
+        });
+    }
+    Ok((
+        r,
+        phase_oracle_ast::Condition::IsPresent {
+            filter: TargetFilter::Typed(t),
+        },
+    ))
+}
+
 /// The printed keyword vocabulary.
 ///
 /// A closed list on purpose: an unrecognized word after "gains" is far more
@@ -887,7 +921,7 @@ pub fn landwalk(w: &str) -> Option<&'static str> {
 
 /// One or more keywords joined by "and" or commas, after a single grant verb.
 fn keyword_list(i: In<'_>) -> R<'_, Vec<String>> {
-    let (mut rest, (first, _)) = keyword_word(i)?;
+    let (mut rest, (first, _)) = grantable_keyword(i)?;
     let mut out = vec![first];
     loop {
         let after_comma = match rest.first() {
@@ -899,7 +933,7 @@ fn keyword_list(i: In<'_>) -> R<'_, Vec<String>> {
             Err(_) if after_comma != rest => after_comma,
             Err(_) => break,
         };
-        match keyword_word(after_and) {
+        match grantable_keyword(after_and) {
             Ok((r, (kw, _))) => {
                 out.push(kw);
                 rest = r;
@@ -908,6 +942,63 @@ fn keyword_list(i: In<'_>) -> R<'_, Vec<String>> {
         }
     }
     Ok((rest, out))
+}
+
+/// Keywords that may be GRANTED, a superset of the bare-line vocabulary.
+///
+/// The two lists answer different questions and conflating them was a real bug.
+/// A keyword may not be hoisted into `keywords` when it also generates a
+/// trigger the grammar would then drop — but "enchanted creature gets +1/+1 and
+/// has FLANKING" grants it perfectly well, because the grant is a
+/// modification and nothing is being dropped. Derived from every `AddKeyword`
+/// the engine emits.
+const GRANTABLE_KEYWORDS: &[&str] = &[
+    "changeling",
+    "exalted",
+    "myriad",
+    "persist",
+    "melee",
+    "flanking",
+    "undying",
+    "phasing",
+    "rebound",
+    "retrace",
+    "provoke",
+    "riot",
+    "mentor",
+    "exploit",
+    "training",
+    "decayed",
+    "sunburst",
+    "evolve",
+    "undaunted",
+    "dethrone",
+    "extort",
+    "augment",
+    "unleash",
+    "toxic",
+    "afterlife",
+];
+
+/// One keyword in GRANT position ("gains flying", "with flying").
+///
+/// Accepts the bare-line vocabulary plus the grant-only one.
+pub fn grantable_keyword(i: In<'_>) -> R<'_, (String, String)> {
+    if let Ok(v) = keyword_word(i) {
+        return Ok(v);
+    }
+    let Some(w) = i.first_word() else {
+        return fail(i);
+    };
+    if !GRANTABLE_KEYWORDS.contains(&w.as_str()) {
+        return fail(i);
+    }
+    let mut c = w.chars();
+    let cap = c
+        .next()
+        .map(|x| x.to_uppercase().to_string())
+        .unwrap_or_default();
+    Ok((i.take_from_n(1), (format!("{cap}{}", c.as_str()), w)))
 }
 
 /// One keyword, yielding the engine's PascalCase name and the printed spelling.
@@ -990,9 +1081,21 @@ pub fn subject_clause(i: In<'_>) -> R<'_, ClauseParse> {
         None => (rest, None),
     };
 
+    // CR 613.1: "as long as ..." gates the continuous effect rather than
+    // timing it. It is read here, beside the duration, because the two occupy
+    // the same trailing position and a clause never carries both.
+    let (rest, condition) = match as_long_as(rest) {
+        Ok((r, c)) => (r, Some(c)),
+        Err(_) => (rest, None),
+    };
+
     let (mut effects, standalone, facts) =
         lower_predicates(&s, preds, dur.clone(), &printed, &printed_subject);
     let facts = facts.merge(ClauseFacts::iterated(&printed_subject));
+    let standalone = standalone.map(|mut sa| {
+        sa.condition = condition.clone();
+        sa
+    });
 
     // CR 101.4: when `player_scope` names who acts, the effect's own player
     // slot is redundant and the engine leaves it out.

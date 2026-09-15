@@ -1628,3 +1628,91 @@ fn a_bullet_with_no_header_declines_rather_than_floating_free() {
     assert!(!p.is_complete());
     assert!(p.out.abilities.is_empty());
 }
+
+// ---------------------------------------------------------------------------
+// Conditions, and the two keyword vocabularies
+// ---------------------------------------------------------------------------
+
+#[test]
+fn as_long_as_gates_a_continuous_effect_rather_than_timing_it() {
+    // CR 613.1. "you control X" means X is on the battlefield under your
+    // control, so the filter records BOTH halves.
+    let v = parsed(
+        "Kird Ape",
+        "This creature gets +1/+2 as long as you control a Forest.",
+    )["static_abilities"]
+        .clone();
+    assert_eq!(
+        v[0]["condition"],
+        json!({
+            "type": "IsPresent",
+            "filter": {
+                "type": "Typed",
+                "type_filters": [{"Subtype": "Forest"}],
+                "controller": "You",
+                "properties": [{"type": "InZone", "zone": "Battlefield"}]
+            }
+        })
+    );
+    assert_eq!(v[0]["affected"], json!({"type": "SelfRef"}));
+    assert_eq!(
+        v[0]["modifications"],
+        json!([{"type": "AddPower", "value": 1}, {"type": "AddToughness", "value": 2}])
+    );
+}
+
+#[test]
+fn an_unbuilt_condition_declines_rather_than_being_approximated() {
+    // The clause's tokens go unconsumed, so its totality check fails. Same rule
+    // the effect grammar follows — a condition is not special.
+    let p = parse_card(
+        "Whatever",
+        "~ gets +1/+2 as long as you have 30 or more life.",
+    );
+    assert!(!p.is_complete());
+    assert!(p.out.static_abilities.is_empty());
+}
+
+#[test]
+fn a_keyword_may_be_grantable_without_being_hoistable() {
+    // The two vocabularies answer different questions, and conflating them was
+    // a real bug. Flanking may not be hoisted into `keywords` — it generates a
+    // trigger the grammar would silently drop — but GRANTING it is a plain
+    // modification with nothing dropped.
+    let granted = parsed(
+        "Whatever",
+        "Enchanted creature gets +1/+1 and has flanking.",
+    )["static_abilities"]
+        .clone();
+    assert_eq!(
+        granted[0]["modifications"],
+        json!([
+            {"type": "AddPower", "value": 1},
+            {"type": "AddToughness", "value": 1},
+            {"type": "AddKeyword", "keyword": "Flanking"}
+        ])
+    );
+
+    let hoisted = parse_card("Whatever", "Flanking");
+    assert!(
+        !hoisted.is_complete(),
+        "must not hoist a keyword whose trigger it drops"
+    );
+}
+
+#[test]
+fn a_negated_controller_clause_is_matched_before_the_positive_one() {
+    // "you don't control" opens with the same two words as "you control", so
+    // the shorter phrase would otherwise claim it and strand the negation.
+    let v = abilities(
+        "Whatever",
+        "Creatures you don't control get -3/-0 until end of turn.",
+    );
+    assert_eq!(v[0]["effect"]["target"]["controller"], "Opponent");
+
+    let yours = abilities(
+        "Whatever",
+        "Creatures you control get -3/-0 until end of turn.",
+    );
+    assert_eq!(yours[0]["effect"]["target"]["controller"], "You");
+}

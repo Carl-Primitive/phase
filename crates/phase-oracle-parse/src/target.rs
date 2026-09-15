@@ -150,6 +150,11 @@ fn state_prop(w: &str) -> Option<FilterProp> {
 /// `you control` / `an opponent controls` / `target player controls`.
 fn controller_clause(i: In<'_>) -> R<'_, Option<ControllerRef>> {
     const TABLE: &[(&str, ControllerRef)] = &[
+        // The negation comes FIRST: "you don't control" starts with the same
+        // two words as "you control", so matching the shorter phrase first
+        // would claim the negation and leave "don't" stranded.
+        ("you don't control", ControllerRef::Opponent),
+        ("you dont control", ControllerRef::Opponent),
         ("you control", ControllerRef::You),
         ("an opponent controls", ControllerRef::Opponent),
         ("your opponents control", ControllerRef::Opponent),
@@ -389,11 +394,11 @@ fn relative_clause(i: In<'_>) -> R<'_, FilterProp> {
                 },
             ));
         }
-        let (r2, (kw, _printed)) = crate::effect::keyword_word(r)?;
+        let (r2, (kw, _printed)) = crate::effect::grantable_keyword(r)?;
         return Ok((r2, FilterProp::WithKeyword { value: kw }));
     }
     if let Ok((r, _)) = word("without")(i) {
-        let (r2, (kw, _printed)) = crate::effect::keyword_word(r)?;
+        let (r2, (kw, _printed)) = crate::effect::grantable_keyword(r)?;
         return Ok((r2, FilterProp::WithoutKeyword { value: kw }));
     }
     fail(i)

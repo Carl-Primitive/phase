@@ -37,7 +37,7 @@ pub use filter::{
     TargetFilter, TypeFilter, TypedFilter, Zone,
 };
 pub use qty::{Quantity, QuantityRef, StatScope};
-pub use static_ability::{Modification, StaticAbility, StaticMode};
+pub use static_ability::{Condition, Modification, StaticAbility, StaticMode};
 pub use trigger::{DamageKindFilter, PhaseName, TriggerDefinition, TriggerMode};
 
 use serde::Serialize;
