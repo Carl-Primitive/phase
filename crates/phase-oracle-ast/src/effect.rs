@@ -220,14 +220,13 @@ pub enum Effect {
         enter_tapped: bool,
         enters_attacking: bool,
     },
+    /// The mass form carries ONLY the four fields the engine prints for it.
+    /// The battlefield-entry riders that `ChangeZone` has are absent, verified
+    /// against every `ChangeZoneAll` in the corpus.
     ChangeZoneAll {
         origin: Option<ZoneName>,
         destination: ZoneName,
         target: TargetFilter,
-        owner_library: bool,
-        enter_transformed: bool,
-        enter_tapped: bool,
-        enters_attacking: bool,
     },
     /// CR 701.5a: counter a spell or ability.
     Counter { target: TargetFilter },
@@ -244,4 +243,40 @@ pub enum Effect {
     },
     /// CR 701.15a.
     Regenerate { target: TargetFilter },
+    /// CR 605: a mana ability's production.
+    Mana { produced: ManaProduced },
+    /// CR 111: token creation.
+    Token {
+        name: String,
+        power: Quantity,
+        toughness: Quantity,
+        /// Core types first, then subtypes, in the engine's printed order.
+        types: Vec<String>,
+        colors: Vec<crate::filter::ManaColor>,
+        keywords: Vec<String>,
+        tapped: bool,
+        count: Quantity,
+        owner: TargetFilter,
+        enters_attacking: bool,
+    },
+}
+
+/// What a mana ability adds. CR 106.1.
+///
+/// `Fixed` lists the exact symbols; `Colorless` is a COUNT because `{C}{C}` is
+/// two of one thing rather than two different things; `AnyOneColor` defers the
+/// choice to the player and carries the colours they may pick from.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum ManaProduced {
+    Fixed {
+        colors: Vec<crate::filter::ManaColor>,
+    },
+    Colorless {
+        count: Quantity,
+    },
+    AnyOneColor {
+        count: Quantity,
+        color_options: Vec<crate::filter::ManaColor>,
+    },
 }

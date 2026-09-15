@@ -279,6 +279,7 @@ pub fn assemble(
     let mut it = parts.into_iter();
     let (first, _, first_dur, first_scope) = it.next()?;
     let mut root = AbilityDefinition::new(kind, first);
+    root.refresh_mana_ability();
     root.cost = cost;
     root.duration = first_dur;
     root.player_scope = first_scope;
@@ -286,6 +287,7 @@ pub fn assemble(
 
     for (e, link, dur, scope) in it {
         let mut next = AbilityDefinition::spell(e);
+        next.refresh_mana_ability();
         next.sub_link = link;
         next.duration = dur;
         next.player_scope = scope;

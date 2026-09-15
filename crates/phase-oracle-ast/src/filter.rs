@@ -61,6 +61,12 @@ pub enum Comparator {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AttachmentKind {
+    Aura,
+    Equipment,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ManaColor {
     White,
     Blue,
@@ -117,6 +123,15 @@ pub enum FilterProp {
     },
     EnchantedBy,
     EquippedBy,
+    /// CR 303.4 / CR 301.5: the object has SOME attachment of this kind, as
+    /// opposed to being the specific host of this source. "Enchanted creatures
+    /// you control" (plural) is this; "enchanted creature" (the Aura's own
+    /// host) is `EnchantedBy`.
+    HasAttachment {
+        kind: AttachmentKind,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        controller: Option<ControllerRef>,
+    },
     /// "another" — excludes the ability's own source. CR 109.5.
     Another,
     HasColor {

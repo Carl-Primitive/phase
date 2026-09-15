@@ -6,11 +6,11 @@
 //! [`scoped`] is the ONE place that translation happens.
 
 use phase_oracle_ast::{
-    ChoiceTiming, ControllerRef, Duration, Effect, Modification, PlayerScope, Quantity,
-    StaticAbility, TapScope, TapState, TargetFilter, ZoneName,
+    ChoiceTiming, ControllerRef, Duration, Effect, ManaColor, ManaProduced, ManaShard,
+    Modification, PlayerScope, Quantity, StaticAbility, TapScope, TapState, TargetFilter, ZoneName,
 };
 
-use crate::prim::{any_of, fail, phrase, phrase_alt, quantity, word, In, R};
+use crate::prim::{any_of, fail, phrase, phrase_alt, quantity, word, In, ManaSym, R};
 use crate::target::{subject, Scope, Subject};
 
 /// Facts a clause establishes that its EFFECT shape cannot carry.
@@ -134,16 +134,17 @@ fn count_of(i: In<'_>, noun: fn(In<'_>) -> R<'_, ()>) -> R<'_, Quantity> {
     Ok((r, Quantity::fixed(1)))
 }
 
+/// Build the single or mass zone-change effect.
+///
+/// The mass form carries FEWER fields than the single one: the engine prints no
+/// battlefield-entry riders on `ChangeZoneAll`. That asymmetry is verified
+/// against the corpus, not assumed.
 fn zone_change(t: TargetFilter, origin: Option<ZoneName>, dest: ZoneName, all: bool) -> Effect {
     if all {
         Effect::ChangeZoneAll {
             origin,
             destination: dest,
             target: t,
-            owner_library: false,
-            enter_transformed: false,
-            enter_tapped: false,
-            enters_attacking: false,
         }
     } else {
         Effect::ChangeZone {
@@ -348,7 +349,192 @@ pub fn imperative(i: In<'_>) -> R<'_, (Effect, ClauseFacts)> {
         return return_clause(i, r);
     }
 
+    if let Ok((r, produced)) = add_mana(i) {
+        return Ok((r, (Effect::Mana { produced }, ClauseFacts::default())));
+    }
+
+    if let Ok((r, e)) = create_token(i) {
+        return Ok((r, (e, ClauseFacts::default())));
+    }
+
     fail(i)
+}
+
+/// `add <mana>` — CR 605.1a.
+///
+/// Three printed shapes, and the engine distinguishes them because they are
+/// genuinely different: a list of symbols is fixed, `{C}` repeated is a COUNT
+/// of one thing, and "one mana of any color" is a choice made on resolution.
+fn add_mana(i: In<'_>) -> R<'_, ManaProduced> {
+    let (r, _) = word("add")(i)?;
+
+    // "add one mana of any color" / "add two mana of any one color"
+    if let Ok((r2, count)) = quantity(r) {
+        if let Ok((r3, _)) = word("mana")(r2) {
+            const OF_ANY: &[(&str, ())] = &[
+                ("of any color", ()),
+                ("of any one color", ()),
+                ("in any combination of colors", ()),
+            ];
+            if let Ok((r4, _)) = phrase_alt(OF_ANY)(r3) {
+                return Ok((
+                    r4,
+                    ManaProduced::AnyOneColor {
+                        count,
+                        color_options: vec![
+                            ManaColor::White,
+                            ManaColor::Blue,
+                            ManaColor::Black,
+                            ManaColor::Red,
+                            ManaColor::Green,
+                        ],
+                    },
+                ));
+            }
+        }
+    }
+
+    // A run of mana symbols. Colourless is counted rather than listed, because
+    // `{C}{C}` is two of one thing.
+    let (mut rest, first) = crate::prim::mana_symbol(r)?;
+    let mut colors = Vec::new();
+    let mut colorless = 0i32;
+    let mut push = |sym: ManaSym| -> bool {
+        match sym {
+            ManaSym::Shard(ManaShard::White) => colors.push(ManaColor::White),
+            ManaSym::Shard(ManaShard::Blue) => colors.push(ManaColor::Blue),
+            ManaSym::Shard(ManaShard::Black) => colors.push(ManaColor::Black),
+            ManaSym::Shard(ManaShard::Red) => colors.push(ManaColor::Red),
+            ManaSym::Shard(ManaShard::Green) => colors.push(ManaColor::Green),
+            ManaSym::Shard(ManaShard::Colorless) => colorless += 1,
+            // Hybrid, Phyrexian and `{X}` production are real shapes this
+            // grammar has no production for; declining keeps the gap visible.
+            _ => return false,
+        }
+        true
+    };
+    if !push(first) {
+        return fail(i);
+    }
+    while let Ok((r2, sym)) = crate::prim::mana_symbol(rest) {
+        if !push(sym) {
+            return fail(i);
+        }
+        rest = r2;
+    }
+
+    match (colors.is_empty(), colorless) {
+        (true, 0) => fail(i),
+        (true, n) => Ok((
+            rest,
+            ManaProduced::Colorless {
+                count: Quantity::fixed(n),
+            },
+        )),
+        (false, 0) => Ok((rest, ManaProduced::Fixed { colors })),
+        // A mixed run is a shape the engine spells differently; decline rather
+        // than guess which half wins.
+        (false, _) => fail(i),
+    }
+}
+
+/// `create <n> [<p/t>] [<colors>] [<subtypes>] <types> token[s] [with <keywords>]`
+///
+/// CR 111.1. The printed order of a token's description is fixed by the
+/// templating, which is what lets one production read every one of them.
+fn create_token(i: In<'_>) -> R<'_, Effect> {
+    let (r, _) = word("create")(i)?;
+    let (r, count) = quantity(r).unwrap_or((r, Quantity::fixed(1)));
+
+    // Power/toughness, present only for creature tokens.
+    let (r, pt) = match crate::prim::pt_pair(r) {
+        Ok((r2, pair)) => (r2, Some(pair)),
+        Err(_) => (r, None),
+    };
+
+    let (r, t) = crate::target::token_body(r)?;
+    let (r, _) = any_of(&["token", "tokens"])(r)?;
+
+    // "with flying" / "with flying and vigilance"
+    let (r, keywords) = token_keywords(r);
+
+    // "that are tapped and attacking" / "that's tapped"
+    let (r, tapped, attacking) = token_entry_state(r);
+
+    let (power, toughness) = pt.unwrap_or((0, 0));
+    Ok((
+        r,
+        Effect::Token {
+            name: t.name,
+            power: Quantity::fixed(power),
+            toughness: Quantity::fixed(toughness),
+            types: t.types,
+            colors: t.colors,
+            keywords,
+            tapped,
+            count,
+            owner: TargetFilter::Controller,
+            enters_attacking: attacking,
+        },
+    ))
+}
+
+/// The keyword list a token is printed with.
+fn token_keywords(i: In<'_>) -> (In<'_>, Vec<String>) {
+    let Ok((mut rest, _)) = word("with")(i) else {
+        return (i, Vec::new());
+    };
+    let mut out = Vec::new();
+    loop {
+        match keyword_word(rest) {
+            Ok((r, (pascal, _))) => {
+                out.push(pascal);
+                rest = r;
+            }
+            Err(_) => break,
+        }
+        let after_sep = match rest.first() {
+            Some(t) if t.kind == phase_oracle_lex::TokenKind::Comma => rest.take_from_n(1),
+            _ => rest,
+        };
+        match word("and")(after_sep) {
+            Ok((r, _)) => rest = r,
+            Err(_) if after_sep != rest => rest = after_sep,
+            Err(_) => break,
+        }
+    }
+    if out.is_empty() {
+        return (i, Vec::new());
+    }
+    (rest, out)
+}
+
+/// "that are tapped and attacking" / "that's tapped".
+fn token_entry_state(i: In<'_>) -> (In<'_>, bool, bool) {
+    const HEADS: &[(&str, ())] = &[("that are", ()), ("that's", ()), ("thats", ())];
+    let Ok((mut rest, _)) = phrase_alt(HEADS)(i) else {
+        return (i, false, false);
+    };
+    let (mut tapped, mut attacking) = (false, false);
+    loop {
+        if let Ok((r, _)) = word("tapped")(rest) {
+            tapped = true;
+            rest = r;
+        } else if let Ok((r, _)) = word("attacking")(rest) {
+            attacking = true;
+            rest = r;
+        } else {
+            break;
+        }
+        match word("and")(rest) {
+            Ok((r, _)) => rest = r,
+            Err(_) => break,
+        }
+    }
+    if !tapped && !attacking {
+        return (i, false, false);
+    }
+    (rest, tapped, attacking)
 }
 
 /// `return <subject> to <zone>`.
@@ -576,6 +762,20 @@ fn predicate<'a>(s: &Subject, i: In<'a>) -> R<'a, Predicate> {
         let (r, _) = word("to")(r)?;
         let (r, victim) = subject(r)?;
         let facts = ClauseFacts::of(s).merge(ClauseFacts::of(&victim));
+        // CR 102.1: a class of PLAYERS is not a mass object target, so it takes
+        // its own effect family rather than the object-shaped `DamageAll`.
+        if let Some(scope) = player_scope_of(&victim) {
+            return Ok((
+                r,
+                Predicate::Instant(
+                    Effect::DamageEachPlayer {
+                        amount: q,
+                        player_filter: scope,
+                    },
+                    facts,
+                ),
+            ));
+        }
         return Ok((
             r,
             Predicate::Instant(

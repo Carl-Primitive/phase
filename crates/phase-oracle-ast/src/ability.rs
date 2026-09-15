@@ -86,6 +86,11 @@ pub struct AbilityDefinition {
     pub player_scope: Option<PlayerScope>,
     #[serde(skip_serializing_if = "SubAbilityLink::is_continuation")]
     pub sub_link: SubAbilityLink,
+    /// CR 605.1a: computed, not parsed. The engine appends it when the ability
+    /// produces mana and needs no target, because that is what decides whether
+    /// it can be activated without using the stack.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub is_mana_ability: bool,
 }
 
 /// Which players an iterated effect runs for.
@@ -117,7 +122,17 @@ impl AbilityDefinition {
             forward_result: false,
             player_scope: None,
             sub_link: SubAbilityLink::ContinuationStep,
+            is_mana_ability: false,
         }
+    }
+
+    /// Recompute the mana-ability rider from the effect chain.
+    ///
+    /// CR 605.1a: an activated or spell ability that could add mana and has no
+    /// target is a mana ability. Derived rather than parsed, so it can never
+    /// disagree with the effect it describes.
+    pub fn refresh_mana_ability(&mut self) {
+        self.is_mana_ability = matches!(*self.effect, Effect::Mana { .. });
     }
 
     pub fn spell(effect: Effect) -> Self {

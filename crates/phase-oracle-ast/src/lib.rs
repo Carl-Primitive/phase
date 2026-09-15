@@ -27,9 +27,10 @@ pub use ability::{
     AbilityDefinition, AbilityKind, ActivationRestriction, Duration, PlayerScope, SubAbilityLink,
 };
 pub use cost::{AbilityCost, ManaCost, ManaShard, SacrificeCost};
-pub use effect::{ChoiceTiming, CounterType, Effect, TapScope, TapState, ZoneName};
+pub use effect::{ChoiceTiming, CounterType, Effect, ManaProduced, TapScope, TapState, ZoneName};
 pub use filter::{
-    Comparator, ControllerRef, FilterProp, ManaColor, TargetFilter, TypeFilter, TypedFilter, Zone,
+    AttachmentKind, Comparator, ControllerRef, FilterProp, ManaColor, TargetFilter, TypeFilter,
+    TypedFilter, Zone,
 };
 pub use qty::{Quantity, QuantityRef, StatScope};
 pub use static_ability::{Modification, StaticAbility, StaticMode};

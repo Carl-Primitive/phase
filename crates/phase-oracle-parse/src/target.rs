@@ -8,7 +8,8 @@
 //! at emission, instead of doubling every verb production here.
 
 use phase_oracle_ast::{
-    ControllerRef, FilterProp, ManaColor, TargetFilter, TypeFilter, TypedFilter, Zone,
+    AttachmentKind, ControllerRef, FilterProp, ManaColor, TargetFilter, TypeFilter, TypedFilter,
+    Zone,
 };
 
 use crate::prim::{any_of, fail, phrase, phrase_alt, self_ref, word, In, R};
@@ -98,6 +99,34 @@ fn capitalized(w: &str) -> String {
     }
 }
 
+/// "enchanted" / "equipped", read against the noun that follows.
+///
+/// The SINGULAR form names this source's own host ("Enchanted creature gets
+/// +1/+2" on an Aura); the PLURAL names any object carrying an attachment of
+/// that kind ("Enchanted creatures you control get +2/+2"). Those are different
+/// predicates and the engine spells them differently, so the number is read
+/// rather than ignored.
+fn attachment_prop(w: &str, next: In<'_>) -> Option<FilterProp> {
+    let kind = match w {
+        "enchanted" => AttachmentKind::Aura,
+        "equipped" => AttachmentKind::Equipment,
+        _ => return None,
+    };
+    let plural = next
+        .first_word()
+        .is_some_and(|n| core_type(&n).is_some() && n.ends_with('s'));
+    Some(if plural {
+        FilterProp::HasAttachment {
+            kind,
+            controller: None,
+        }
+    } else if kind == AttachmentKind::Aura {
+        FilterProp::EnchantedBy
+    } else {
+        FilterProp::EquippedBy
+    })
+}
+
 /// An adjective that restricts without naming a type.
 fn state_prop(w: &str) -> Option<FilterProp> {
     Some(match w {
@@ -173,7 +202,9 @@ fn typed_filter(i: In<'_>) -> R<'_, TypedFilter> {
     // part, so adding an axis never adds a branch here.
     loop {
         let Some(w) = i.first_word() else { break };
-        if let Some(c) = color(&w) {
+        if let Some(prop) = attachment_prop(&w, i.take_from_n(1)) {
+            f.properties.push(prop);
+        } else if let Some(c) = color(&w) {
             f.properties.push(FilterProp::HasColor { color: c });
         } else if let Some(c) = non_color(&w) {
             f.properties.push(FilterProp::NotColor { color: c });
@@ -302,6 +333,11 @@ fn typed_filter_list(i: In<'_>) -> R<'_, TargetFilter> {
         }
     }
 
+    // A controller or zone printed after the LAST alternative qualifies the
+    // whole list: "target instant or sorcery card from your graveyard" means
+    // both from the graveyard, not just the sorcery.
+    propagate_trailing_qualifier(&mut parts);
+
     let mut out = if parts.len() == 1 {
         parts.pop().expect("one element")
     } else {
@@ -311,6 +347,43 @@ fn typed_filter_list(i: In<'_>) -> R<'_, TargetFilter> {
         add_prop(&mut out, FilterProp::Another);
     }
     Ok((rest, out))
+}
+
+/// Copy the last alternative's controller and zone onto the earlier ones.
+///
+/// English attaches a trailing qualifier to the whole coordination, but the
+/// grammar necessarily reads it while parsing the final branch. Doing this once
+/// here is what keeps every alternative's filter honest without the branch
+/// parser needing lookahead.
+fn propagate_trailing_qualifier(parts: &mut [TargetFilter]) {
+    let Some(TargetFilter::Typed(last)) = parts.last() else {
+        return;
+    };
+    let controller = last.controller;
+    let zone: Vec<FilterProp> = last
+        .properties
+        .iter()
+        .filter(|p| matches!(p, FilterProp::InZone { .. }))
+        .cloned()
+        .collect();
+    if controller.is_none() && zone.is_empty() {
+        return;
+    }
+    let count = parts.len();
+    for part in parts.iter_mut().take(count.saturating_sub(1)) {
+        if let TargetFilter::Typed(t) = part {
+            if t.controller.is_none() {
+                t.controller = controller;
+            }
+            if !t
+                .properties
+                .iter()
+                .any(|p| matches!(p, FilterProp::InZone { .. }))
+            {
+                t.properties.extend(zone.iter().cloned());
+            }
+        }
+    }
 }
 
 /// A player reference that is not an object. CR 102.1.
@@ -370,6 +443,25 @@ fn player_target(i: In<'_>) -> R<'_, Subject> {
     // which is a back-reference and not a new choice.
     if let Ok((r, _)) = phrase("that player")(i) {
         return Ok((r, Subject::single(TargetFilter::TriggeringPlayer)));
+    }
+    // "that creature" / "that permanent" refer back to the object already
+    // chosen by an earlier clause of the same ability (CR 601.2c).
+    const BACK_REFS: &[(&str, ())] = &[
+        ("that creature", ()),
+        ("that permanent", ()),
+        ("that artifact", ()),
+        ("that enchantment", ()),
+        ("that land", ()),
+        ("that card", ()),
+    ];
+    if let Ok((r, _)) = phrase_alt(BACK_REFS)(i) {
+        return Ok((r, Subject::single(TargetFilter::ParentTarget)));
+    }
+    // CR 201.5: "this card" is a self-reference the engine deliberately does
+    // NOT normalize to `~`, because it is context-dependent — but in subject
+    // position it is still the source.
+    if let Ok((r, _)) = phrase("this card")(i) {
+        return Ok((r, Subject::single(TargetFilter::SelfRef)));
     }
     if let Ok((r, _)) = word("you")(i) {
         return Ok((r, Subject::single(TargetFilter::Controller)));
@@ -527,4 +619,78 @@ fn is_plural_head(i: In<'_>) -> bool {
 /// The subject grammar, for positions where a target must be chosen.
 pub fn target(i: In<'_>) -> R<'_, Subject> {
     subject(i)
+}
+
+/// A token's printed body: colours, subtypes and core types, in that order.
+///
+/// CR 111.1 + CR 205: the token templating prints "1/1 white Soldier creature
+/// token", so the colour precedes the subtype and the subtype precedes the core
+/// type. The engine's `types` list is core types first and then subtypes, which
+/// is the reverse of the printed order for the subtype half — hence one place
+/// that reorders, rather than every caller knowing.
+pub struct TokenBody {
+    pub name: String,
+    pub types: Vec<String>,
+    pub colors: Vec<ManaColor>,
+}
+
+pub fn token_body(i: In<'_>) -> R<'_, TokenBody> {
+    let mut i = i;
+    let mut colors = Vec::new();
+    let mut subtypes: Vec<String> = Vec::new();
+    let mut core: Vec<String> = Vec::new();
+
+    loop {
+        let Some(w) = i.first_word() else { break };
+        if matches!(w.as_str(), "token" | "tokens") {
+            break;
+        }
+        if let Some(c) = color(&w) {
+            colors.push(c);
+        } else if w == "and" && !colors.is_empty() {
+            // "3/3 blue and red Elemental" — the conjunction joins colours.
+        } else if let Some(t) = core_type(&w) {
+            // Only the permanent types appear in a token's type line.
+            let name = match t {
+                TypeFilter::Creature => "Creature",
+                TypeFilter::Artifact => "Artifact",
+                TypeFilter::Enchantment => "Enchantment",
+                TypeFilter::Land => "Land",
+                TypeFilter::Planeswalker => "Planeswalker",
+                _ => break,
+            };
+            core.push(name.to_string());
+        } else if w == "colorless" {
+            // An explicit absence of colour, which the engine records as an
+            // empty list rather than as a marker.
+        } else if w.chars().next().is_some_and(|c| c.is_alphabetic()) {
+            subtypes.push(capitalized(&w));
+        } else {
+            break;
+        }
+        i = i.take_from_n(1);
+    }
+
+    if core.is_empty() && subtypes.is_empty() {
+        return fail(i);
+    }
+
+    // The token's name is its last printed subtype ("Phyrexian Wurm" keeps
+    // both words, so the whole subtype run is the name).
+    let name = if subtypes.is_empty() {
+        core.first().cloned().unwrap_or_default()
+    } else {
+        subtypes.join(" ")
+    };
+
+    let mut types = core;
+    types.extend(subtypes);
+    Ok((
+        i,
+        TokenBody {
+            name,
+            types,
+            colors,
+        },
+    ))
 }

@@ -601,3 +601,265 @@ fn a_cards_own_name_and_its_generic_self_reference_are_the_same_token() {
     assert_eq!(by_name[0]["effect"], by_phrase[0]["effect"]);
     assert_eq!(by_name[0]["description"], "~ deals 2 damage to any target.");
 }
+
+// ---------------------------------------------------------------------------
+// Mana abilities
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_coloured_mana_ability_lists_its_symbols_and_is_flagged() {
+    // CR 605.1a: `is_mana_ability` is computed from the effect, never parsed,
+    // so it cannot disagree with what the ability actually does.
+    let v = abilities("Llanowar Elves", "{T}: Add {G}.");
+    assert_eq!(
+        v[0]["effect"],
+        json!({"type": "Mana", "produced": {"type": "Fixed", "colors": ["Green"]}})
+    );
+    assert_eq!(v[0]["is_mana_ability"], true);
+}
+
+#[test]
+fn colourless_mana_is_a_count_but_coloured_mana_is_a_list() {
+    // `{C}{C}` is two of ONE thing; `{B}{B}{B}` is three separate symbols. The
+    // engine draws that distinction and the grammar has to as well.
+    let c = abilities("Whatever", "{T}: Add {C}{C}.");
+    assert_eq!(
+        c[0]["effect"]["produced"],
+        json!({"type": "Colorless", "count": {"type": "Fixed", "value": 2}})
+    );
+    let b = abilities("Dark Ritual", "Add {B}{B}{B}.");
+    assert_eq!(
+        b[0]["effect"]["produced"],
+        json!({"type": "Fixed", "colors": ["Black", "Black", "Black"]})
+    );
+}
+
+#[test]
+fn mana_of_any_color_carries_the_colours_that_may_be_chosen() {
+    let v = abilities("Whatever", "{T}: Add one mana of any color.");
+    assert_eq!(
+        v[0]["effect"]["produced"],
+        json!({
+            "type": "AnyOneColor",
+            "count": {"type": "Fixed", "value": 1},
+            "color_options": ["White", "Blue", "Black", "Red", "Green"]
+        })
+    );
+}
+
+#[test]
+fn an_unmodelled_mana_shape_declines_rather_than_being_guessed_at() {
+    // Hybrid and Phyrexian production are real shapes with no production here.
+    let p = parse_card("Whatever", "{T}: Add {W/U}.");
+    assert!(!p.is_complete());
+}
+
+// ---------------------------------------------------------------------------
+// Tokens
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_creature_token_reads_its_whole_printed_body() {
+    assert_eq!(
+        abilities(
+            "Raise the Alarm",
+            "Create two 1/1 white Soldier creature tokens."
+        )[0]["effect"],
+        json!({
+            "type": "Token",
+            "name": "Soldier",
+            "power": {"type": "Fixed", "value": 1},
+            "toughness": {"type": "Fixed", "value": 1},
+            "types": ["Creature", "Soldier"],
+            "colors": ["White"],
+            "keywords": [],
+            "tapped": false,
+            "count": {"type": "Fixed", "value": 2},
+            "owner": {"type": "Controller"},
+            "enters_attacking": false
+        })
+    );
+}
+
+#[test]
+fn a_token_keeps_core_types_before_subtypes_whatever_the_printed_order() {
+    // Printed: "1/1 white Spirit creature token". Engine: ["Creature","Spirit"].
+    let v = abilities(
+        "Lingering Souls",
+        "Create two 1/1 white Spirit creature tokens with flying.",
+    );
+    assert_eq!(v[0]["effect"]["types"], json!(["Creature", "Spirit"]));
+    assert_eq!(v[0]["effect"]["keywords"], json!(["Flying"]));
+}
+
+#[test]
+fn a_token_can_be_printed_with_more_than_one_colour() {
+    let v = abilities(
+        "Aqueous Aria",
+        "Create a 3/3 blue and red Elemental creature token with flying.",
+    );
+    assert_eq!(v[0]["effect"]["colors"], json!(["Blue", "Red"]));
+}
+
+#[test]
+fn a_noncreature_token_has_no_power_or_toughness_printed() {
+    let v = abilities("Whatever", "Create a Treasure artifact token.");
+    assert_eq!(v[0]["effect"]["name"], "Treasure");
+    assert_eq!(v[0]["effect"]["types"], json!(["Artifact", "Treasure"]));
+    assert_eq!(
+        v[0]["effect"]["power"],
+        json!({"type": "Fixed", "value": 0})
+    );
+}
+
+#[test]
+fn a_token_that_enters_tapped_and_attacking_records_both() {
+    let v = triggers(
+        "Hero of Bladehold",
+        "Whenever ~ attacks, create two 1/1 white Soldier creature tokens that are tapped and attacking.",
+    );
+    let e = &v[0]["execute"]["effect"];
+    assert_eq!(e["tapped"], true);
+    assert_eq!(e["enters_attacking"], true);
+}
+
+// ---------------------------------------------------------------------------
+// Player classes versus player targets
+// ---------------------------------------------------------------------------
+
+#[test]
+fn damage_to_a_class_of_players_is_not_a_mass_object_effect() {
+    // CR 102.1: a player is not an object, so "each opponent" cannot share a
+    // target slot with "all creatures".
+    let players = abilities("Boltwave", "Boltwave deals 3 damage to each opponent.");
+    assert_eq!(
+        players[0]["effect"],
+        json!({
+            "type": "DamageEachPlayer",
+            "amount": {"type": "Fixed", "value": 3},
+            "player_filter": {"type": "Opponent"}
+        })
+    );
+
+    let objects = abilities("Whatever", "~ deals 3 damage to each creature.");
+    assert_eq!(objects[0]["effect"]["type"], "DamageAll");
+}
+
+#[test]
+fn an_iterated_player_class_is_a_scope_not_a_target() {
+    // CR 101.4: "each opponent mills a card" is a CONTROLLER-shaped mill run
+    // once per opponent, which is why the effect's own target says "Controller".
+    let v = triggers(
+        "Altar of the Brood",
+        "Whenever another permanent you control enters, each opponent mills a card.",
+    );
+    let ex = &v[0]["execute"];
+    assert_eq!(ex["effect"]["target"], json!({"type": "Controller"}));
+    assert_eq!(ex["player_scope"], json!({"type": "Opponent"}));
+}
+
+// ---------------------------------------------------------------------------
+// Attachment, back-references and coordination
+// ---------------------------------------------------------------------------
+
+#[test]
+fn an_auras_own_host_and_any_enchanted_object_are_different_predicates() {
+    // Singular names THIS source's host; plural names anything carrying an Aura.
+    let host = abilities("Holy Strength", "Enchanted creature gets +1/+2.");
+    let _ = host;
+    let statics =
+        parsed("Holy Strength", "Enchanted creature gets +1/+2.")["static_abilities"].clone();
+    assert_eq!(
+        statics[0]["affected"]["properties"],
+        json!([{"type": "EnchantedBy"}])
+    );
+
+    let any = parsed(
+        "A Tale for the Ages",
+        "Enchanted creatures you control get +2/+2.",
+    )["static_abilities"]
+        .clone();
+    assert_eq!(
+        any[0]["affected"]["properties"],
+        json!([{"type": "HasAttachment", "kind": "Aura"}])
+    );
+}
+
+#[test]
+fn an_attachment_adjective_works_in_target_position_too() {
+    let v = abilities(
+        "Cut the Earthly Bond",
+        "Return target enchanted permanent to its owner's hand.",
+    );
+    assert_eq!(
+        v[0]["effect"]["target"]["type_filters"],
+        json!(["Permanent"])
+    );
+    assert_eq!(
+        v[0]["effect"]["target"]["properties"],
+        json!([{"type": "EnchantedBy"}])
+    );
+}
+
+#[test]
+fn a_trailing_qualifier_applies_to_every_alternative_it_coordinates() {
+    // "target instant or sorcery card from your graveyard" — the graveyard
+    // qualifies both, which is how English coordination works and what the
+    // engine records.
+    let v = triggers(
+        "Archaeomancer",
+        "When ~ enters, return target instant or sorcery card from your graveyard to your hand.",
+    );
+    let t = &v[0]["execute"]["effect"]["target"];
+    assert_eq!(t["type"], "Or");
+    for n in 0..2 {
+        assert_eq!(t["filters"][n]["controller"], "You");
+        assert_eq!(
+            t["filters"][n]["properties"],
+            json!([{"type": "InZone", "zone": "Graveyard"}])
+        );
+    }
+}
+
+#[test]
+fn another_is_printed_once_and_distributes_over_the_whole_list() {
+    // CR 109.5. "Sacrifice another creature or artifact" excludes the source
+    // from BOTH alternatives.
+    let v = abilities(
+        "Ahriman",
+        "{3}, Sacrifice another creature or artifact: Draw a card.",
+    );
+    let t = &v[0]["cost"]["costs"][1]["target"];
+    assert_eq!(t["filters"][0]["properties"], json!([{"type": "Another"}]));
+    assert_eq!(t["filters"][1]["properties"], json!([{"type": "Another"}]));
+}
+
+#[test]
+fn a_later_clause_refers_back_to_the_object_already_chosen() {
+    let v = abilities(
+        "Burning Cloak",
+        "Target creature gets +2/+0 until end of turn. Burning Cloak deals 2 damage to that creature.",
+    );
+    assert_eq!(
+        v[0]["sub_ability"]["effect"]["target"],
+        json!({"type": "ParentTarget"})
+    );
+}
+
+#[test]
+fn the_mass_zone_change_carries_fewer_fields_than_the_single_one() {
+    // Verified against every ChangeZoneAll in the corpus: the engine prints no
+    // battlefield-entry riders on the mass form.
+    let one = abilities(
+        "Raise Dead",
+        "Return target creature card from your graveyard to your hand.",
+    );
+    assert!(one[0]["effect"].get("enter_tapped").is_some());
+
+    let all = abilities(
+        "Crystal Chimes",
+        "Return all enchantment cards from your graveyard to your hand.",
+    );
+    assert_eq!(all[0]["effect"]["type"], "ChangeZoneAll");
+    assert!(all[0]["effect"].get("enter_tapped").is_none());
+}
