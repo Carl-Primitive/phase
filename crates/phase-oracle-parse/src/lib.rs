@@ -217,6 +217,17 @@ fn parse_line(l: &Line<'_>, src: &str) -> Result<Lowered, Decline> {
         // the engine keeps a tag even though it drops the word.
         return Ok(match (lowered, tag) {
             (Lowered::Ability(mut a), Some(t)) => {
+                // The timing rider these keywords carry is printed only in
+                // their reminder text, which the grammar drops — so it is
+                // derived from the keyword, the way Equip's sorcery speed is.
+                // Boast is deliberately absent: it also carries a condition
+                // ("only if this creature attacked"), and emitting half of its
+                // restrictions would be worse than emitting none.
+                if matches!(t, ActivationTag::PowerUp | ActivationTag::Exhaust)
+                    && a.activation_restrictions.is_empty()
+                {
+                    a.activation_restrictions = vec![ActivationRestriction::OnlyOnce];
+                }
                 a.ability_tag = Some(t);
                 Lowered::Ability(a)
             }
@@ -256,10 +267,17 @@ fn static_description(line: &str) -> String {
         // Measured, and not a rule anyone would guess: the engine keeps the
         // word immediately before a bare "creatures" (76 of 100 keeps) and
         // drops it before anything else — a subtype, a colour, "permanents"
-        // (257 drops). A more elaborate reading that also kept it before
-        // "legendary creatures" and "untapped creatures" scored WORSE, so the
-        // simple one stands. The exclusion itself survives in the filter's
-        // `Another` property either way; only the prose differs.
+        // (257 drops).
+        //
+        // The obvious generalization — keep it whenever the noun phrase's head
+        // is "creature(s)" and no colour qualifies it, so that "Other legendary
+        // creatures" keeps it too — was tried TWICE, at different coverage
+        // levels, and scored worse both times (5,452 against 5,474, then 5,650
+        // against 5,672). It is not a near miss; do not re-attempt it without
+        // new evidence about what actually drives the engine's choice.
+        //
+        // The exclusion itself survives in the filter's `Another` property
+        // either way; only the prose differs.
         if rest.starts_with("creatures") || rest.starts_with("creature ") {
             return line.to_string();
         }
