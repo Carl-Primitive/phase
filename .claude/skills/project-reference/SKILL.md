@@ -9,7 +9,7 @@ Lookup material for build commands, the verification cadence, architecture, envi
 
 ## Tilt resources & operational rules
 
-**Tilt is always running and continuously rebuilds on file changes.** Do NOT run `cargo build`, `cargo clippy`, `cargo test -p phase-engine`, `pnpm run type-check`, or `pnpm lint` directly — they compete for cargo target locks, and any profile/feature/target-dir difference from Tilt's commands is a full extra build of the engine crate. Check Tilt logs instead. Two loops: `tilt up` (client dev loop: wasm + frontend + lobby worker, with `-- server test lint` opt-ins) and `tilt up -- engine` (engine-only: `card-data` + `clippy` + `test-engine`, client resources removed — the loop for card and rules-engine work).
+**Tilt is always running and continuously rebuilds on file changes.** In the engine loop (`tilt up -- engine`) only `build-native` rebuilds on every edit; `clippy`, `test-engine` and `card-data` build once at startup and are then manual — `tilt-wait.sh` triggers them when asked to wait on them, so `verify-card.sh` still runs them — and `test-engine-focus` runs only the tests you name. Do NOT run `cargo build`, `cargo clippy`, `cargo test -p phase-engine`, `pnpm run type-check`, or `pnpm lint` directly — they compete for cargo target locks, and any profile/feature/target-dir difference from Tilt's commands is a full extra build of the engine crate. Check Tilt logs instead. Two loops: `tilt up` (client dev loop: wasm + frontend + lobby worker, with `-- server test lint` opt-ins) and `tilt up -- engine` (engine-only: `card-data` + `clippy` + `test-engine`, client resources removed — the loop for card and rules-engine work).
 
 **Available Tilt resources** (defined in `Tiltfile`):
 | Resource | What it does | Triggers on |

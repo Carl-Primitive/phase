@@ -109,6 +109,10 @@ A "stop and return" is success, not failure. Bandaids that ship are far worse th
 
 ## Verification
 
+### Test-first order
+
+Before implementing, write the Verification Matrix's tests (the integration test file and the parser tests) from the plan's claims, register the `mod` line, and run them through `test-engine-focus` (`printf 'test(/<file stem>/)\n' > .tilt-test-focus && tilt trigger test-engine-focus`). Expect the revert-discriminating rows to be RED on the unimplemented tree and record which were; a row that is already green is not discriminating and must be reworked before it can count. Then implement, run the focused set to green, and only then let the full `test-engine` run settle for the report. Harness facts the plan got wrong (prompt timing, library seeding, layer flush, phase walking) surface in this first focused run — fix the test, note the deviation in the report, and do not stop-and-return for them.
+
 ### Implementation/fix mode: preparatory evidence only
 
 Run the following only after implementation/fix edits land. Record the commands, starting SHA, ending SHA, and result as `PREPARATORY`; none completes the candidate gate. The orchestrator derives the committed-candidate completion set from these same surface-specific blocks and must rerun the applicable gates at `CANDIDATE_SHA`, retaining the Tilt-first path and isolated direct fallback specified here; it must not treat this preparatory output as their completion result. Existing discriminating-test, maintainer-simulation, selected-authority/provenance, coverage-honesty, and CR-annotation gates below remain single-sourced and mandatory for implementation/fix mode.

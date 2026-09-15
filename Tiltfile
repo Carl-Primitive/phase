@@ -27,6 +27,18 @@
 # on top of the three the engine loop needs. A card contributor never runs the
 # client, so `-- engine` pays for three engine builds instead of five, and its
 # test/lint resources auto-start without needing `test lint` as well.
+#
+# In the engine loop the three GATE resources (clippy, test-engine, card-data)
+# build once at startup and are then MANUAL: an edit marks them pending, and
+# only `tilt trigger <r>` or the UI runs them. scripts/tilt-wait.sh sends that
+# trigger itself when it is asked to wait on a resource that has pending changes
+# and no build in flight, so verify-card.sh (and every checklist that calls
+# tilt-wait) still just works. build-native stays automatic as the per-edit
+# compile signal; test-engine-focus runs only the tests you name. Rationale:
+# clippy (~15 min in its own profile root) and card-data (~4 min tool build,
+# plus a catalog promotion) on every keystroke were the bulk of a card run's CPU
+# and contended with the 28k-test suite, and none of them matters until
+# verification.
 
 config.define_string_list('enable', args = True, usage = 'Resource groups to auto-start: server, tauri, test, lint, https; or `engine` (engine-only loop) / `data` (card-data only)')
 enabled = config.parse().get('enable', [])
@@ -34,6 +46,9 @@ enabled = config.parse().get('enable', [])
 # `engine` and `data` are loops, not groups: they restrict the resource set at
 # the bottom of this file, and `engine` auto-starts its own test/lint resources.
 ENGINE_LOOP = 'engine' in enabled
+# Gate resources are manual in the engine loop (see the header): the first build
+# still happens via auto_init, later runs come from tilt-wait.sh / tilt trigger.
+ENGINE_GATE_TRIGGER = TRIGGER_MODE_MANUAL if ENGINE_LOOP else TRIGGER_MODE_AUTO
 DATA_LOOP = 'data' in enabled and not ENGINE_LOOP
 
 # ---------------------------------------------------------------------------
@@ -258,6 +273,7 @@ local_resource('test-engine',
     resource_deps = ['build-native'],
     allow_parallel = True,
     auto_init = 'test' in enabled or ENGINE_LOOP,
+    trigger_mode = ENGINE_GATE_TRIGGER,
     labels = ['test'],
 )
 
@@ -319,6 +335,7 @@ local_resource('clippy',
     deps = ['crates/', 'client/src/adapter/generated/interaction/index.ts', 'scripts/check-interaction-bindings.sh'],
     ignore = TMP_IGNORE,
     auto_init = 'lint' in enabled or ENGINE_LOOP,
+    trigger_mode = ENGINE_GATE_TRIGGER,
     allow_parallel = True,
     labels = ['lint'],
 )
@@ -409,6 +426,7 @@ local_resource('card-data',
         'crates/engine/data/mtgjson-vintage',
     ],
     auto_init = True,
+    trigger_mode = ENGINE_GATE_TRIGGER,
     labels = ['data'],
 )
 

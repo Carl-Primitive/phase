@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Wait for one or more Tilt resources to reach a terminal state for the CURRENT code.
 #
-# Usage: tilt-wait.sh [--interval SECONDS] [--timeout SECONDS] <resource>...
+# Usage: tilt-wait.sh [--interval SECONDS] [--timeout SECONDS] [--no-trigger] <resource>...
 #
 # Exit codes:
 #   0    all resources are fresh and reached updateStatus=ok with no in-flight build
@@ -17,6 +17,12 @@
 # bypassed, which restores the very false green this script exists to prevent.
 #
 # A resource must be both TERMINAL and FRESH before its status is believed.
+#
+# Manual resources: in the engine loop the gate resources (clippy, test-engine,
+# card-data) do not rebuild on their own after startup. A resource that still has
+# pending changes and no build in flight one interval after we first looked is
+# sent `tilt trigger <r>` (once), because being asked to wait on it means the
+# caller wants it run. --no-trigger disables that for pure observation.
 #
 #   Terminal: currentBuild.spanID == "none". This avoids reacting to a stale
 #   buildHistory error while a newer build is still compiling.
@@ -54,6 +60,7 @@ set -euo pipefail
 
 interval=20
 timeout=""
+trigger=1
 resources=()
 
 usage() {
@@ -70,6 +77,10 @@ while (($#)); do
     --timeout)
       timeout="${2:?--timeout requires a value}"
       shift 2
+      ;;
+    --no-trigger)
+      trigger=0
+      shift
       ;;
     -h|--help)
       usage
@@ -104,6 +115,8 @@ repo_root=$(git -C "$(dirname "$0")" rev-parse --show-toplevel 2>/dev/null || pw
 start_ref="$(mktemp "${TMPDIR:-/tmp}/tilt-wait.XXXXXX")"
 trap 'rm -f "$start_ref"' EXIT
 warned=""
+seen=""
+triggered=""
 
 # freshness <resource> <last-build-start-time>
 # Echoes: fresh | stale | never-built | unverifiable | foreign
@@ -231,6 +244,19 @@ while true; do
       all_done=0
       continue
     fi
+
+    # No build in flight. A resource that still carries pending changes on the
+    # second look is a manual-trigger resource (an auto resource would have
+    # started by now, cargo lock permitting) -- ask Tilt to run it, once.
+    pending=$(jq -r '.status.hasPendingChanges // false' <<< "$json")
+    if ((trigger)) && [[ "$pending" == true && "$seen" == *"|$r|"* && "$triggered" != *"|$r|"* ]]; then
+      echo "tilt-wait: $r has pending changes and no build in flight -- tilt trigger $r" >&2
+      tilt trigger "$r" >/dev/null 2>&1 || echo "tilt-wait: tilt trigger $r failed" >&2
+      triggered="$triggered|$r|"
+      all_done=0
+      continue
+    fi
+    seen="$seen|$r|"
 
     fresh=$(freshness "$r" "$started")
     printf '%s status=%s current=%s started=%s freshness=%s\n' "$r" "$st" "$current" "$started" "$fresh"

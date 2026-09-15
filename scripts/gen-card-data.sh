@@ -132,9 +132,35 @@ case "$INPUT_DATE" in
 esac
 STAMP_DATE="$(cat "$MTGJSON_VINTAGE_FILE" 2>/dev/null || echo "0000-00-00")"
 ALLOW_TRACKED_WRITES=1
+CATALOG_SKIP_REASON=""
 if [[ "$INPUT_DATE" < "$STAMP_DATE" ]]; then
   ALLOW_TRACKED_WRITES=0
+  CATALOG_SKIP_REASON=older
 fi
+# Local default: leave the tracked catalogs alone. A contributor's tree must
+# test against the committed known-tokens.toml / oracle-subtypes.json /
+# mtgjson-vintage -- the ones CI builds -- not against whatever MTGJSON
+# published this week: build.rs embeds the working-copy catalog, so a promoted
+# newer catalog forces an engine rebuild, dirties three tracked files in every
+# card branch, and (when it ships a token the committed overlay hand-adds) turns
+# test-engine red at base for everyone. Promotion is for the weekly refresh
+# workflow and the deploy/release builds, which run in GitHub Actions; set
+# PHASE_PROMOTE_CATALOGS=1 to opt in locally (and =0 to opt out in CI).
+PROMOTE_CATALOGS="${PHASE_PROMOTE_CATALOGS:-${GITHUB_ACTIONS:+1}}"
+if [ "$ALLOW_TRACKED_WRITES" = "1" ] && [ "${PROMOTE_CATALOGS:-0}" != "1" ]; then
+  ALLOW_TRACKED_WRITES=0
+  CATALOG_SKIP_REASON=local
+fi
+# refuse_tracked_write <path>: explain why a tracked catalog was left untouched.
+# "older" is a real refusal the caller should fix; "local" is the default.
+refuse_tracked_write() {
+  case "$CATALOG_SKIP_REASON" in
+    local)
+      echo "note: leaving tracked $1 untouched (local default; PHASE_PROMOTE_CATALOGS=1 to regenerate it)." ;;
+    *)
+      echo "WARNING: refusing to promote $1: MTGJSON input date $INPUT_DATE is older than committed vintage $STAMP_DATE. Refresh MTGJSON inputs (rerun without MTGJSON_SKIP_REFRESH=1 or set PHASE_REFRESH_MTGJSON=1) before retrying." >&2 ;;
+  esac
+}
 
 # Build and run the Oracle-based card data generator
 echo "Generating card data from MTGJSON via Oracle text parser..."
@@ -277,7 +303,7 @@ elif [ "$ALLOW_TRACKED_WRITES" = "1" ]; then
   echo "Token catalog changed: $TOKENS_BEFORE -> $TOKENS_AFTER presets; rebuilding generators to embed it..."
   cargo build --profile tool --features "$FEATURES" "${TOOL_BINS[@]}"
 else
-  echo "WARNING: refusing to promote $TOKENS_FILE: MTGJSON input date $INPUT_DATE is older than committed vintage $STAMP_DATE. Refresh MTGJSON inputs (rerun without MTGJSON_SKIP_REFRESH=1 or set PHASE_REFRESH_MTGJSON=1) before retrying." >&2
+  refuse_tracked_write "$TOKENS_FILE"
   rm -f "$TOKENS_TMP"
   untrack_tmp "$TOKENS_TMP"
 fi
@@ -301,7 +327,7 @@ else
   # oracle-gen already avoids touching an unchanged sidecar, but that cannot
   # make an older CardTypes snapshot safe. Omit its write mode entirely so a
   # stale cache cannot regress this watched, committed vocabulary.
-  echo "WARNING: refusing to update crates/engine/data/oracle-subtypes.json: MTGJSON input date $INPUT_DATE is older than committed vintage $STAMP_DATE. Refresh MTGJSON inputs (rerun without MTGJSON_SKIP_REFRESH=1 or set PHASE_REFRESH_MTGJSON=1) before retrying." >&2
+  refuse_tracked_write crates/engine/data/oracle-subtypes.json
 fi
 run_tool_with_recovery "$OUTPUT_TMP" "${ORACLE_GEN_ARGS[@]}"
 
@@ -310,7 +336,8 @@ run_tool_with_recovery "$OUTPUT_TMP" "${ORACLE_GEN_ARGS[@]}"
 # path and retain the existing compare-before-promote discipline: a needless
 # mtime change here would requeue every engine watcher, while an interruption
 # cannot expose a partial date that later re-admits older inputs.
-if [[ "$INPUT_DATE" > "$STAMP_DATE" ]]; then
+# The stamp is a tracked catalog too: it moves only when the catalogs did.
+if [[ "$INPUT_DATE" > "$STAMP_DATE" ]] && [ "$ALLOW_TRACKED_WRITES" = "1" ]; then
   VINTAGE_TMP="$(mktemp "${MTGJSON_VINTAGE_FILE}.tmp.XXXXXX")"
   track_tmp "$VINTAGE_TMP"
   printf '%s\n' "$INPUT_DATE" > "$VINTAGE_TMP"

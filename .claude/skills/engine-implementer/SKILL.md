@@ -125,6 +125,10 @@ Do not author or edit the plan in this thread — surgical-fix mode (below) is t
 
 Adjudicate the gate as defined in "Phase-fit gate and chartered runs", appending the phase-fit record entry. Single-phase verdict → the pipeline below proceeds unchanged (plus the stated re-adjudication points). Multi-phase verdict → spawn the charter-mode planner, run the charter review loop, then iterate phases — each phase runs Steps 1–7 with the per-phase spawn inputs and the `PHASE_BASE_SHA` substitution rule, followed by run-level acceptance.
 
+### Step 1b — Process tier
+
+Size the ceremony to the change. When the initial adjudication measured **one unit and fewer than 13 expected scope paths**, the run is a **light tier**: Step 2 is at most one planner round and one reviewer round; if that review returns no design finding, the orchestrator applies its spot findings as check-and-replace (surgical-fix mode) and dispatches Step 3 at once. A design finding buys exactly one more planner-plus-reviewer round; a second design finding returns the run to the full Step 2 loop. Everything after Step 2 is unchanged — the executor's gates, verify-card at the committed candidate and Step 6's independent review of the real code are where a light-tier plan's remaining errors are cheapest to find (on the Agent Frank Horrigan run the executor's first Tilt cycle surfaced the same harness facts the plan loop had spent six rounds deriving). Multi-unit or ≥13-path plans keep the full loop.
+
 ### Step 2 — Review the plan until clean (unbounded loop)
 
 Spawn a `general-purpose` agent and instruct it to invoke `/review-engine-plan` against the full plan.
@@ -133,7 +137,7 @@ Spawn a `general-purpose` agent and instruct it to invoke `/review-engine-plan` 
 
 If the reviewer returns gaps, spawn a **fresh** planning agent (Step 1 inputs plus the reviewer's findings as additional constraints) to produce a revised plan, then spawn a **fresh** reviewer agent against the revised plan.
 
-**Repeat until a full review round returns zero gaps.** There is no iteration cap — "two rounds and ship" is not acceptable. Stop only for:
+**Repeat until a review round returns no design finding.** A round whose findings are all spot (each names a coordinate and its replacement text; none requires deciding anything) is applied by the orchestrator as check-and-replace (surgical-fix mode below) and ENDS the loop — the independent check of the real code is Step 6, and a further whole-plan re-review only re-derives coordinates a fresh reader has already verified. Design rounds have no iteration cap. Stop only for:
 
 - a true human design decision the planner cannot resolve,
 - missing external access (CR text unavailable, file inaccessible),
@@ -143,7 +147,7 @@ If the reviewer returns gaps, spawn a **fresh** planning agent (Step 1 inputs pl
 
 The last two stop the run and surface to the user with the phase-fit record. A T4 firing without those conditions exits this loop into decomposition per "Phase-fit gate and chartered runs" — that is a route, not a stop.
 
-Each review must run in a fresh agent context — never reuse the previous reviewer's context.
+The first review runs in a fresh agent context. Later rounds continue the SAME reviewer (send it the revised plan and the planner's change table via SendMessage): the independence that matters is author-vs-reviewer, and the reviewer never authored anything. Spawn a fresh reviewer only when the revision changed a design entry (a named step, sub-step, enum variant or call site), where a stale mental model is the risk.
 
 #### Surgical-fix mode — when the design is settled and the findings are spot drift
 
@@ -163,7 +167,7 @@ The loop above assumes findings move the **design**. Once they stop doing that, 
 - **Two-sided verification per edit:** before the edit, the quoted old string is present at the finding's named coordinate — a quote that is not there is a stale coordinate, not an applicable fix; after the edit, the text the replacement adds is present exactly once and sits where the old string was, and the old string is absent — except that when the replacement contains the old string, that string survives by construction and the added text is the sole gate; count occurrences, not matching lines, 1:1 per fragment, not a lucky aggregate.
 - **State the sweep's boundary.** A changelog entry that quotes the struck text will match your own grep for it. Population, predicate, scan direction, and whether the matched line counts — write them down; every enumeration defect is an unstated predicate rather than a bad measurement.
 - **Fix the neighbours the fix breaks.** A finding's repair frequently contradicts a section that classified the old form. Sweep by mechanism, not by coordinate.
-- **Then re-review the WHOLE artifact**, fresh context — not just the repaired sections, per `$bug-triage`'s targeted-re-review rule. Repeat apply → whole-artifact re-review until a round returns zero gaps; any finding that requires *deciding* something ends surgical mode and returns to the unbounded loop above. Surgical mode replaces the planner-rewrite rounds, never the final independent check.
+- **Then proceed to Step 3.** A spot-only round is the loop's exit, so no re-review round follows the apply; Step 6's review of the committed candidate is the whole-artifact check that matters. If applying a finding turns out to require a decision, it was a design finding: dispatch a planner and continue the loop instead.
 - **Record the mode switch, its two measurements, the spot-vs-design classification of each round's findings, and why the mode ends** in `<git-common-dir>/engine-implementer-runs/<run-id>/surgical-mode-switch` (in multi-phase runs, tag each entry with its phase index — index only, no SHA), never in the plan text the fresh re-reviewer and the executor read — recording it there hands the one remaining independent check a prior verdict. It is a working note for this loop, not a provenance record. Append one numbered entry per round, never overwrite — ending surgical mode and re-entering it later continues the same numbered sequence; only a round that enters the mode records the switch and its three measurements, and only a round that ends the mode records why.
 
 **This does not contradict `$bug-triage`'s fixpoint gate.** That gate requires whole-plan re-review because *"revisions routinely INTRODUCE new gaps in untouched-looking areas"* — planner **rewrites** do. A check-and-replace at a named coordinate does not rewrite, which is why it is the safe tool once the design has stopped moving. `$review-engine-plan` ends its loop with *"or the caller stops the process"* and states no criteria; this section is those criteria, and it lives here because the orchestrator is that caller.
@@ -174,7 +178,7 @@ This is not a licence for "two rounds and ship". The unbounded loop remains the 
 
 Spawn the `engine-implementation-executor` agent.
 
-**Spawn inputs:** mode `implementation/fix`; the reviewed clean plan in full; `BASE_SHA`; named `START_SHA`; the in-bounds / out-of-bounds path list; named `IMPLEMENTATION_WORKTREE`; any prior reviewer findings (none on first round); in chartered runs additionally the charter, phase index, and deferral allowlist (the executor's phase mode). First round: `START_SHA == BASE_SHA`. Fix round: `START_SHA` is the previously reviewed `CANDIDATE_SHA`, never a moving branch head.
+**Spawn inputs:** mode `implementation/fix`; the reviewed clean plan in full; the executor's test-first order (write the Verification Matrix's tests first, run them on `test-engine-focus`, then implement); `BASE_SHA`; named `START_SHA`; the in-bounds / out-of-bounds path list; named `IMPLEMENTATION_WORKTREE`; any prior reviewer findings (none on first round); in chartered runs additionally the charter, phase index, and deferral allowlist (the executor's phase mode). First round: `START_SHA == BASE_SHA`. Fix round: `START_SHA` is the previously reviewed `CANDIDATE_SHA`, never a moving branch head.
 
 The implementation executor edits only its `SCOPE_PATHS` list — an admitted-class site outside it is a stop-and-return the orchestrator answers with a review-only extension (one fresh charter-mode reviewer, no planner) and a re-dispatch — and runs **preparatory** checks. Preparatory success is not completion evidence. Fix rounds inside the executor iterate on Tilt's manual `test-engine-focus` resource (a nextest filterset in `.tilt-test-focus` naming the failing tests; same artifacts as `test-engine`), and only the full `test-engine` run at the checkpointed candidate counts in Step 5. Its existing discriminating-test, selected-authority, coverage-honesty, maintainer-simulation, and CR-annotation gates remain the authoritative gates; do not restate or replace them here.
 
@@ -196,7 +200,7 @@ The full suite is owed at the tree being shipped. An intermediate fix round may 
 
 ### Step 6 — Review the immutable candidate
 
-Spawn a fresh `general-purpose` agent to invoke `/review-impl` against `BASE_SHA..CANDIDATE_SHA`, with the original task, the reviewed plan, the in-scope paths, and any prior findings. It reviews the diff and the checks that were run; it re-runs whatever it needs to trust. Findings dispatch a fix round.
+Spawn a fresh `general-purpose` agent to invoke `/review-impl` against `BASE_SHA..CANDIDATE_SHA`, with the original task, the reviewed plan, the in-scope paths, and any prior findings. It reviews the diff and the checks that were run; it re-runs whatever it needs to trust. HIGH or MED findings dispatch a fix round and a fresh review of the new candidate. A round whose findings are all LOW also dispatches a fix round, but its re-check is the SAME reviewer continued via SendMessage on the fix diff (previous candidate to new candidate), not a fresh whole-candidate review; the executor verifies LOW fixes on `test-engine-focus`, and the full suite still runs once at the final candidate in Step 5.
 
 ### Step 7 — Final acceptance
 

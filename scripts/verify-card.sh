@@ -14,7 +14,10 @@
 #   2. tilt-wait.sh clippy test-engine card-data (Tilt's warm engine loop; the
 #                                                freshness check inside tilt-wait
 #                                                guarantees the result describes
-#                                                the current source tree)
+#                                                the current source tree, and
+#                                                tilt-wait triggers the engine
+#                                                loop's manual gate resources
+#                                                itself when they are pending)
 #   3. per card: supported == true and gap_count == 0 in the coverage data
 #                                                that Tilt's card-data resource
 #                                                just wrote (client/public/coverage-data.json)

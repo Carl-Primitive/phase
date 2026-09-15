@@ -100,6 +100,7 @@ loop, say what you could not measure and which test buys it, rather than falling
 
 9. **Verification matrix**
    - Reject plans without a claim-to-test map for every behavioral claim.
+   - Do not raise findings on harness driver mechanics (helper names, prompt timing, priority passes, library seeding, phase walking) unless the row's claim is unmeasurable as stated: those are executor-time facts measured through `test-engine-focus`, and the executor may depart from the plan's driver suggestions. Review the claim, the seam and the revert-failing assertion.
    - Each map entry must name the changed seam/function, production entry point, runtime test, revert-failing assertion, sibling/negative cases, and coverage status impact.
    - Reject helper-only tests for changes whose production path goes through `apply()`, `WaitingFor`/`GameAction`, casting/stack, combat declaration, replacement handling, or the scenario runner.
    - Parser shape tests do not satisfy runtime semantics or coverage-support claims. Parser-only shape tests are acceptable only when unsupported semantics remain honest via `Effect::unimplemented`, an equivalent strict-failure marker, or unchanged red coverage.

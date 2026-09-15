@@ -74,8 +74,9 @@ verify-card.sh run on the Agent Frank Horrigan branch; put both in the PR body.
 2. pre-push: are the four legacy checks wanted by default for humans? They are opt-in now.
 3. `setup.sh --agent` now implies `--engine` (no pnpm install) — agents touching client/
    must run plain setup.sh. OK?
-4. The catalog promotion on fresh clones (known-tokens.toml / mtgjson-vintage) dirties every
-   contributor's tree; is `MTGJSON_SKIP_REFRESH`-by-default for non-maintainers desirable?
+4. RESOLVED on this branch: gen-card-data.sh no longer promotes the tracked catalogs locally
+   (PHASE_PROMOTE_CATALOGS=1 opts in; GitHub Actions promotes by default). The first card run
+   showed why: the promoted catalog turned test-engine red at base (see Measurements).
 5. Long term: move the 1.26M inline test lines out of the lib, then split parser/types/game
    into crates — the only change that makes an engine edit stop recompiling everything.
 
@@ -88,3 +89,60 @@ verify-card.sh run on the Agent Frank Horrigan branch; put both in the PR body.
   out a stock-Tiltfile branch in the watched checkout while Tilt runs.
 - Card branch `card/agent-frank-horrigan` exists at the tooling head with no commits yet;
   gap = `Static:Unrecognized(it attacked this turn)`; 7 other cards share the phrase.
+## First card run through the loop: Agent Frank Horrigan (2026-09-14)
+
+Branch `card/agent-frank-horrigan` cut from the tooling head; engine-implementer pipeline, Tilt-only
+verification, no direct cargo, no second worktree for anything but git.
+
+### What was slow or awkward (feedback that revised this branch)
+
+1. **The committed token overlay is stale against this week's MTGJSON, so test-engine is red at base
+   for every contributor.** setup --engine / gen-card-data promoted a newer known-tokens.toml
+   (Reality Fracture ships the Heartwood token that overlay row 1cb84b18… hand-adds); tokens-gen
+   printed the "delete the stale row" advisory, and the engine's own guard test
+   `token_presets::tests::committed_overlay_rows_merge_clean_against_the_catalog` (build.rs embeds the
+   working-copy catalog) fails. verify-card.sh therefore reports FAIL on test-engine no matter what the
+   card change does. Upstream already has the fix in flight (chore PR #8793 refreshes the catalogs).
+   Getting a true PASS locally means restoring the two promoted files to HEAD after the last card-data
+   run and paying one extra engine rebuild (build.rs rerun-if-changed). Open question 4 in this file is
+   now concrete: the loop should not promote tracked catalogs into a contributor's tree by default.
+2. **Plan review took 8 rounds (~2 h 50 m) for a ~30-line parser change** because planners and
+   reviewers were forbidden to run anything and reasoned statically about GameScenario behaviour
+   (blocker prompt timing, empty-library game-over, no layer pass at build()) — three material findings
+   and one real engine defect that one test run would have surfaced. Fixed on this branch: the
+   probe policy in engine-planner / review-engine-plan still said "isolated CARGO_TARGET_DIR"; it now
+   runs a throwaway integration test through Tilt's `test-engine-focus`; card-test gained foot-guns
+   7–9; engine-planner Step 2 / review-engine-plan check 3 gained the write-before-read ordering
+   check; engine-implementer enters surgical mode on the first spot-only round.
+3. **Every fix round re-ran the full 28k-test suite** (~11–15 min test time each, three times).
+   Fixed: manual `test-engine-focus` resource (same NATIVE_TEST_PACKAGES artifacts, nextest filterset
+   from `.tilt-test-focus`), wired into the executor agent, CLAUDE.md, project-reference,
+   AI-CONTRIBUTOR §6 and every skill checklist. Not available to this run (the running Tilt watches
+   the card branch's stock Tiltfile).
+4. **Tilt keeps only the last two builds per resource**, so cold-loop timings must be captured as they
+   happen; tilt-wait/verify-card cannot report them afterwards.
+5. **The real engine finding**: `commit_attack_declaration` flushed layers before writing
+   `creatures_attacked_this_turn`, so any static gated on "attacked this turn" was stale for the whole
+   declare-attackers priority window. Found in plan round 7, fixed in the card commit (class-level).
+
+### Measurements (Agent Frank Horrigan, 2026-09-14, PR phase-rs/phase#8887)
+
+Machine under contention the whole time (an iOS release build + xcodebuild from another session;
+load 20–140, briefly 380–546).
+
+| Stage | Wall | Notes |
+|---|---|---|
+| Start | 19:15 | target/ 21 GB; Tilt cold loop (started 17:44) still finishing |
+| Cold `tilt up -- engine` | 17:44 → 19:36 | clippy ~106 min, build-native 10m28s compile, test-engine 19 min (1154 s of tests), card-data 90 s link |
+| Plan loop (8 rounds, 1 design blocker found in round 7) | 19:16 → 22:06 | ~2 h 50 m; rounds 3–6 were one or two nits each |
+| Executor round 1 | 22:06 → 23:01 | edits 10 min; Tilt: build-native 141 s, clippy 881 s, test-engine 932 s, card-data 258 s; test-only fix: build-native 19 s, clippy 87 s, test-engine 661 s, card-data not rerun |
+| verify-card at the candidate (warm) | 21 s / 22 s | FAIL only on the pre-existing catalog guard test; everything else green |
+| Implementation review 1 → fix (3 LOW applied, 1 deferred) → review 2 (1 LOW) | 23:01 → 23:50 | the fix round paid two more full test-engine cycles (721 s, 661 s) |
+| Catalog restore rebuild | 23:36 → abandoned | build.rs rerun → build-native + clippy + test-engine again; the PR was opened before it finished, at the maintainer's direction |
+| PR opened | 23:58 | target/ 38 GB (35 GB after Tilt stopped; target-gc found nothing older than 7 days) |
+
+Engine compiles in the run: cold 3 (build-native, clippy, tool) + edit round 3 incremental + fix round 2
+incremental + catalog restore 3 = 11 compile passes, of which 3 (restore) and ~4 (clippy/card-data on
+edits that did not need them) are avoided by the manual-gate + no-promotion changes on this branch.
+
+verify-card.sh itself: 21–22 s on a warm loop; its cost is entirely the Tilt cycles it waits on.
