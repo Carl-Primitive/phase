@@ -67,10 +67,22 @@ FIXTURE=""
 OUT=""
 RC=0
 
+# Every fixture is torn down on exit, including on a failing assertion, so a red
+# run doesn't leave a dozen trees in $TMPDIR. Only ever holds `mktemp -d` paths.
+FIXTURES=()
+cleanup() {
+  local d
+  for d in ${FIXTURES+"${FIXTURES[@]}"}; do
+    [ -n "$d" ] && [ -d "$d" ] && rm -rf "$d"
+  done
+}
+trap cleanup EXIT
+
 # A repo root with only what the gate reads: its own copy in scripts/, and the
 # parser tree it greps.
 new_fixture() {
   FIXTURE="$(mktemp -d)"
+  FIXTURES+=("$FIXTURE")
   mkdir -p "$FIXTURE/scripts" "$FIXTURE/crates/engine/src/parser"
   cp "$GATE" "$FIXTURE/scripts/check-prelowered-ratchet.sh"
 }
