@@ -56,6 +56,7 @@ fn main() {
     let mut complete = 0usize;
     let mut exact = 0usize;
     let mut regressions = 0usize;
+    let mut improvements = 0usize;
     let mut declined_lines = 0usize;
     let mut by_production: BTreeMap<&'static str, usize> = BTreeMap::new();
     // Every Nth decline per production, so the sample spans the corpus instead
@@ -76,7 +77,22 @@ fn main() {
             declined_lines += 1;
             let seen = by_production.entry(d.production).or_default();
             *seen += 1;
-            if *seen % 97 == 1 {
+            // Group samples by the line's HEAD WORD rather than only by
+            // production: a decline on a verb the grammar already has is a
+            // near-miss worth far more than one on a verb it has never seen.
+            let head = d
+                .text
+                .split_whitespace()
+                .next()
+                .unwrap_or("")
+                .trim_matches(|c: char| !c.is_alphanumeric())
+                .to_lowercase();
+            if std::env::var("PARITY_HEAD").ok().as_deref() == Some(head.as_str()) {
+                let bucket = decline_samples.entry(d.production).or_default();
+                if bucket.len() < 25 {
+                    bucket.push(d.text.chars().take(110).collect());
+                }
+            } else if std::env::var("PARITY_HEAD").is_err() && *seen % 97 == 1 {
                 let bucket = decline_samples.entry(d.production).or_default();
                 if bucket.len() < 20 {
                     bucket.push(d.text.chars().take(100).collect());
@@ -144,8 +160,27 @@ fn main() {
 
         // A card the OLD parser lowered to something, where the new parser
         // claims completeness but disagrees. This is the stop-the-line bucket.
-        regressions += 1;
-        let bucket = if p.out.is_empty() {
+        // The engine emits `Unimplemented` where ITS parser gave up. Where we
+        // produce a real parse instead, that is a WIN, not a regression, and
+        // counting it as a disagreement would hide the thing this rewrite
+        // exists to do. (+2 Mace: the engine's name-normalization eats "+2/+2"
+        // into "~/~" and the line fails its static parser.)
+        let theirs_unimplemented = [
+            arr(card, "abilities"),
+            arr(card, "triggers"),
+            arr(card, "static_abilities"),
+        ]
+        .iter()
+        .any(|v| {
+            serde_json::to_string(v)
+                .unwrap_or_default()
+                .contains("\"Unimplemented\"")
+        });
+
+        let bucket = if theirs_unimplemented {
+            improvements += 1;
+            "engine declined, we parsed"
+        } else if p.out.is_empty() {
             // The card's whole Oracle text was reminder text, so the engine's
             // abilities came from its TYPE LINE (a dual land's mana abilities)
             // rather than from any sentence. Not a grammar gap: the input this
@@ -166,6 +201,9 @@ fn main() {
         } else {
             "abilities differ"
         };
+        if bucket != "engine declined, we parsed" {
+            regressions += 1;
+        }
         *mismatch_bucket.entry(bucket).or_default() += 1;
 
         if bucket.starts_with("dropped") && examples.len() < show {
@@ -200,6 +238,7 @@ fn main() {
     println!("cards with every line parsed          {complete}");
     println!("  of those, EXACT match vs engine     {exact}");
     println!("  of those, DISAGREE with engine      {regressions}   <-- stop-the-line");
+    println!("  of those, engine declined, we parsed {improvements}");
     if complete > 0 {
         println!(
             "exact-match rate among complete cards {:.1}%",

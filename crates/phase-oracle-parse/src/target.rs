@@ -8,8 +8,8 @@
 //! at emission, instead of doubling every verb production here.
 
 use phase_oracle_ast::{
-    AttachmentKind, Comparator, ControllerRef, FilterProp, ManaColor, TargetFilter, TypeFilter,
-    TypedFilter, Zone,
+    AttachmentKind, Comparator, ControllerRef, FilterProp, ManaColor, PtScope, PtStat, Quantity,
+    TargetFilter, TypeFilter, TypedFilter, Zone,
 };
 
 use crate::prim::{any_of, fail, phrase, phrase_alt, self_ref, word, In, R};
@@ -259,6 +259,46 @@ fn typed_filter(i: In<'_>) -> R<'_, TypedFilter> {
         }
     }
 
+    // A bare SUBTYPE with no core type after it: "Destroy all Forests",
+    // "target Goblins". CR 205.3 subtypes are printed capitalized and ordinary
+    // nouns are not, so capitalization in the source is the signal — which is
+    // why this is read from the original text rather than the lowercased word.
+    if f.type_filters.is_empty() {
+        if let Some(w) = i.first_word() {
+            let capitalized_in_source = i
+                .first()
+                .map(|t| t.text(i.src))
+                .is_some_and(|s| s.chars().next().is_some_and(char::is_uppercase));
+            let named = (core_type(&w).is_none() && capitalized_in_source)
+                .then(|| crate::subtypes::singular_of(&w))
+                .flatten();
+            if let Some(name) = named {
+                // The bare subtype stands alone. The engine does NOT spell out
+                // the implied type line here: "all Zombies" is
+                // `[Subtype(Zombie)]`, not `[Creature, Subtype(Zombie)]`.
+                f.type_filters.push(TypeFilter::Subtype(name.to_string()));
+                i = i.take_from_n(1);
+
+                while let Ok((r, prop)) = relative_clause(i) {
+                    f.properties.push(prop);
+                    i = r;
+                }
+                let (r, ctrl) = controller_clause(i)?;
+                i = r;
+                f.controller = ctrl;
+                let (r, zone) = zone_clause(i)?;
+                i = r;
+                if let Some((z, owner)) = zone {
+                    f.properties.push(FilterProp::InZone { zone: z });
+                    if let Some(o) = owner {
+                        f.controller = Some(o);
+                    }
+                }
+                return Ok((i, f));
+            }
+        }
+    }
+
     // The core type itself. Required unless a negated type already stood in for
     // it ("target nonland permanent" has both; "nonland" alone does not).
     match i.first_word().and_then(|w| core_type(&w)) {
@@ -289,6 +329,13 @@ fn typed_filter(i: In<'_>) -> R<'_, TypedFilter> {
     i = r;
     f.controller = ctrl;
 
+    // A relative clause is read BEFORE the zone, because that is the printed
+    // order: "target creature card WITH FLYING from your graveyard".
+    while let Ok((r, prop)) = relative_clause(i) {
+        f.properties.push(prop);
+        i = r;
+    }
+
     let (r, zone) = zone_clause(i)?;
     i = r;
     if let Some((z, owner)) = zone {
@@ -299,6 +346,69 @@ fn typed_filter(i: In<'_>) -> R<'_, TypedFilter> {
     }
 
     Ok((i, f))
+}
+
+/// `with <keyword>` / `without <keyword>` / `with mana value N or less` /
+/// `with power N or greater`.
+///
+/// CR 205 + CR 208: a trailing relative clause restricts the noun it follows.
+/// This is the production whose ABSENCE the totality rule made visible —
+/// "destroy target creature with mana value 3 or less" declined rather than
+/// silently widening to every creature, which is the 738-card class the
+/// existing parser's post-hoc auditor cannot see.
+fn relative_clause(i: In<'_>) -> R<'_, FilterProp> {
+    if let Ok((r, _)) = word("with")(i) {
+        // "with mana value N or less" — CR 202.3.
+        if let Ok((r2, _)) = phrase("mana value")(r) {
+            let (r3, (cmp, n)) = comparison(r2)?;
+            return Ok((
+                r3,
+                FilterProp::Cmc {
+                    comparator: cmp,
+                    value: Quantity::fixed(n),
+                },
+            ));
+        }
+        // "with power N or greater" / "with toughness N or less".
+        if let Ok((r2, stat)) =
+            phrase_alt(&[("power", PtStat::Power), ("toughness", PtStat::Toughness)])(r)
+        {
+            let (r3, (cmp, n)) = comparison(r2)?;
+            return Ok((
+                r3,
+                FilterProp::PtComparison {
+                    stat,
+                    scope: PtScope::Current,
+                    comparator: cmp,
+                    value: Quantity::fixed(n),
+                },
+            ));
+        }
+        let (r2, (kw, _printed)) = crate::effect::keyword_word(r)?;
+        return Ok((r2, FilterProp::WithKeyword { value: kw }));
+    }
+    if let Ok((r, _)) = word("without")(i) {
+        let (r2, (kw, _printed)) = crate::effect::keyword_word(r)?;
+        return Ok((r2, FilterProp::WithoutKeyword { value: kw }));
+    }
+    fail(i)
+}
+
+/// `N or less` / `N or greater` / `N`.
+///
+/// Magic prints the bound before the direction, so the number is read first and
+/// the comparator second — the reverse of how it reads in code.
+fn comparison(i: In<'_>) -> R<'_, (Comparator, i32)> {
+    let (r, n) = crate::prim::number(i)?;
+    const TABLE: &[(&str, Comparator)] = &[
+        ("or less", Comparator::LE),
+        ("or greater", Comparator::GE),
+        ("or more", Comparator::GE),
+    ];
+    match phrase_alt(TABLE)(r) {
+        Ok((r2, cmp)) => Ok((r2, (cmp, n))),
+        Err(_) => Ok((r, (Comparator::EQ, n))),
+    }
 }
 
 /// A list of object descriptions joined by "or": "artifact, creature, or land".
@@ -369,10 +479,20 @@ fn propagate_trailing_qualifier(parts: &mut [TargetFilter]) {
         return;
     };
     let controller = last.controller;
+    // Only a ZONE and a MANA VALUE distribute. Both are properties of the card
+    // itself, so they bound the whole coordination: "target instant or sorcery
+    // card from your graveyard", "target creature or planeswalker with mana
+    // value 3 or less".
+    //
+    // A keyword or a power comparison does NOT distribute, and trying it made
+    // things measurably worse: "artifact or creature with flying" restricts
+    // only the creature, because only a creature can have flying. Which
+    // qualifiers reach back over a coordination is a semantic question, not a
+    // syntactic one.
     let zone: Vec<FilterProp> = last
         .properties
         .iter()
-        .filter(|p| matches!(p, FilterProp::InZone { .. }))
+        .filter(|p| matches!(p, FilterProp::InZone { .. } | FilterProp::Cmc { .. }))
         .cloned()
         .collect();
     if controller.is_none() && zone.is_empty() {
@@ -384,12 +504,10 @@ fn propagate_trailing_qualifier(parts: &mut [TargetFilter]) {
             if t.controller.is_none() {
                 t.controller = controller;
             }
-            if !t
-                .properties
-                .iter()
-                .any(|p| matches!(p, FilterProp::InZone { .. }))
-            {
-                t.properties.extend(zone.iter().cloned());
+            for p in &zone {
+                if !t.properties.contains(p) {
+                    t.properties.push(p.clone());
+                }
             }
         }
     }
@@ -483,6 +601,18 @@ fn player_target(i: In<'_>) -> R<'_, Subject> {
     // which is a back-reference and not a new choice.
     if let Ok((r, _)) = phrase("that player")(i) {
         return Ok((r, Subject::single(TargetFilter::TriggeringPlayer)));
+    }
+    // A bare pronoun is NOT resolved here. "It" means the chosen target after
+    // "Untap target creature", and the SOURCE after "Whenever this creature
+    // attacks" — the same word, two referents, decided by whether an earlier
+    // clause of the same ability chose a target. That context does not reach
+    // this production, so resolving it here would be a guess; the clause
+    // declines instead. Reading it is a real piece of work, not an oversight.
+    //
+    // It is still matched and rejected explicitly, because a sentence-initial
+    // "It" is capitalized and would otherwise be read as a bare subtype.
+    if crate::prim::any_of(&["it", "they", "them"])(i).is_ok() {
+        return fail(i);
     }
     // "that creature" / "that permanent" refer back to the object already
     // chosen by an earlier clause of the same ability (CR 601.2c).
@@ -634,9 +764,18 @@ pub fn subject(i: In<'_>) -> R<'_, Subject> {
 /// "another target artifact or creature" means another of either.
 fn add_prop(f: &mut TargetFilter, p: FilterProp) {
     match f {
-        // Appended, not prepended: the engine prints `Another` after the
-        // adjectives it shares a noun phrase with ("nontoken", "attacking").
-        TargetFilter::Typed(t) => t.properties.push(p),
+        // Position follows the PRINTED order. "another" is printed before the
+        // noun, so it lands after the adjectives that share the noun phrase
+        // ("nontoken", "attacking") but before a zone clause that trails it
+        // ("another target creature card FROM YOUR GRAVEYARD").
+        TargetFilter::Typed(t) => {
+            let at = t
+                .properties
+                .iter()
+                .position(|q| matches!(q, FilterProp::InZone { .. }))
+                .unwrap_or(t.properties.len());
+            t.properties.insert(at, p);
+        }
         TargetFilter::Or { filters } => {
             for inner in filters {
                 add_prop(inner, p.clone());

@@ -20,12 +20,13 @@ pub mod line;
 pub mod normalize;
 pub mod prim;
 pub mod stream;
+pub mod subtypes;
 pub mod target;
 pub mod trigger;
 
 use phase_oracle_ast::{
-    AbilityCost, AbilityDefinition, AbilityKind, ActivationRestriction, CardOutput, Keyword,
-    SubAbilityLink, TriggerDefinition,
+    AbilityCost, AbilityDefinition, AbilityKind, ActivationRestriction, CardOutput, Effect,
+    Keyword, SubAbilityLink, TriggerDefinition,
 };
 use phase_oracle_lex::{lex, Token, TokenKind};
 
@@ -173,6 +174,20 @@ fn parse_line(l: &Line<'_>, src: &str) -> Result<Lowered, Decline> {
     }
 
     spell_line(l, src)
+}
+
+/// A static ability's description, as the engine prints it.
+///
+/// The leading "Other" is dropped. The exclusion it states survives in the
+/// filter's `Another` property, so the word is redundant in the prose — and
+/// this is what the engine does, verified across the corpus.
+fn static_description(line: &str) -> String {
+    for prefix in ["Other ", "other "] {
+        if let Some(rest) = line.strip_prefix(prefix) {
+            return rest.to_string();
+        }
+    }
+    line.to_string()
 }
 
 /// Drop a leading ability word, yielding the line it introduces.
@@ -460,7 +475,7 @@ fn spell_line(l: &Line<'_>, src: &str) -> Result<Lowered, Decline> {
             .statics
             .into_iter()
             .map(|mut sa| {
-                sa.description = Some(l.description.clone());
+                sa.description = Some(static_description(&l.description));
                 sa
             })
             .collect();
@@ -491,6 +506,26 @@ fn effect_chain(toks: &[Token], src: &str) -> Option<Chain> {
     let mut sentence_count = 0usize;
 
     for (n, sent) in line::sentences(toks).into_iter().enumerate() {
+        // CR 701.15b: "It can't be regenerated" is printed as its own sentence
+        // but is a RIDER on the destruction before it, not an instruction of
+        // its own. The engine records it as a field, so it is folded back here.
+        if line::is_cant_regenerate(sent, src) {
+            match effects.last_mut().map(|p| &mut p.0) {
+                Some(Effect::Destroy {
+                    cant_regenerate, ..
+                })
+                | Some(Effect::DestroyAll {
+                    cant_regenerate, ..
+                }) => {
+                    *cant_regenerate = true;
+                    continue;
+                }
+                // A rider with nothing to attach to is not something the
+                // grammar understands; declining keeps that visible.
+                _ => return None,
+            }
+        }
+
         let p = line::sentence_effects(sent, src)?;
         sentence_count += 1;
         facts = facts.merge(p.facts);

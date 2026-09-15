@@ -114,6 +114,23 @@ pub fn render(toks: &[Token], src: &str) -> String {
     out.trim().to_string()
 }
 
+/// Is this sentence the "can't be regenerated" rider? CR 701.15b.
+///
+/// Both printed subjects mean the same thing: "it" after a single-object
+/// destruction, "they" after a mass one.
+pub fn is_cant_regenerate(toks: &[Token], src: &str) -> bool {
+    const FORMS: &[(&str, ())] = &[
+        ("it can't be regenerated", ()),
+        ("they can't be regenerated", ()),
+        ("that creature can't be regenerated", ()),
+    ];
+    let stream = Tokens::new(toks, src);
+    match phrase_alt(FORMS)(stream) {
+        Ok((rest, _)) => is_exhausted(rest),
+        Err(_) => false,
+    }
+}
+
 /// A trailing duration phrase. CR 611.2.
 pub fn duration(i: In<'_>) -> Option<(In<'_>, Duration)> {
     const TABLE: &[(&str, Duration)] = &[

@@ -51,6 +51,19 @@ pub enum ControllerRef {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PtStat {
+    Power,
+    Toughness,
+}
+
+/// CR 613: whether the comparison reads the printed value or the current one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PtScope {
+    Current,
+    Base,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Comparator {
     GT,
     LT,
@@ -129,6 +142,13 @@ pub enum FilterProp {
     ColorCount {
         comparator: Comparator,
         count: u8,
+    },
+    /// CR 208 / CR 209: a power or toughness comparison.
+    PtComparison {
+        stat: PtStat,
+        scope: PtScope,
+        comparator: Comparator,
+        value: Quantity,
     },
     /// CR 903.3: the object is a commander.
     IsCommander,

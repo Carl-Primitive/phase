@@ -600,6 +600,12 @@ fn return_clause<'a>(orig: In<'a>, r: In<'a>) -> R<'a, (Effect, ClauseFacts)> {
 
 /// When an object choice is made, for a subject that was not targeted.
 fn choice_timing(s: &Subject) -> Option<ChoiceTiming> {
+    // The engine's `selection` field is only partly predictable: it correlates
+    // with a `You` controller 93 to 38, so no rule reproduces it exactly. This
+    // reading — an object the text did not TARGET is chosen during resolution
+    // (CR 608.2d rather than CR 601.2c) — is the best-scoring one measured, and
+    // is kept because dropping the field entirely scored WORSE. It is a known
+    // approximation, not a settled rule.
     (!s.targeted && matches!(s.filter, TargetFilter::Typed(_)))
         .then_some(ChoiceTiming::AtResolution)
 }

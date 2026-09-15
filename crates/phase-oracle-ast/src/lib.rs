@@ -33,8 +33,8 @@ pub use cost::{
 };
 pub use effect::{ChoiceTiming, CounterType, Effect, ManaProduced, TapScope, TapState, ZoneName};
 pub use filter::{
-    AttachmentKind, Comparator, ControllerRef, FilterProp, ManaColor, TargetFilter, TypeFilter,
-    TypedFilter, Zone,
+    AttachmentKind, Comparator, ControllerRef, FilterProp, ManaColor, PtScope, PtStat,
+    TargetFilter, TypeFilter, TypedFilter, Zone,
 };
 pub use qty::{Quantity, QuantityRef, StatScope};
 pub use static_ability::{Modification, StaticAbility, StaticMode};

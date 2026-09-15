@@ -52,14 +52,19 @@ fn spell(effect: Value, description: &str) -> Value {
 
 #[test]
 fn a_clause_with_an_unparsed_qualifier_declines_rather_than_widening_its_target() {
-    // This is the 738-card class the existing parser's post-hoc auditor is
-    // blind to. Dropping "with mana value 3 or less" would silently turn a
-    // narrow removal spell into an unconditional one, and nothing downstream
-    // could tell. Here it is structurally impossible: the qualifier's tokens
-    // are unconsumed, so the line declines with a span.
+    // The invariant, stated on a qualifier the grammar cannot YET express.
+    // Dropping it would silently turn a narrow removal spell into an
+    // unconditional one and nothing downstream could tell. Here that is
+    // structurally impossible: the qualifier's tokens go unconsumed, so the
+    // line declines with a span instead of widening the target.
+    //
+    // The mana-value form this test used to pin now PARSES — see
+    // `a_relative_clause_narrows_the_target_it_follows`. That the gap was a
+    // visible decline first, rather than a silent behaviour difference, is the
+    // whole point of the totality rule.
     let p = parse_card(
-        "Doom Whisper",
-        "Destroy target creature with mana value 3 or less.",
+        "Whatever",
+        "Destroy target creature that was dealt damage this turn.",
     );
     assert!(
         !p.is_complete(),
@@ -1320,4 +1325,96 @@ fn discarding_at_random_is_part_of_the_cost_not_a_separate_clause() {
             "self_ref": false
         })
     );
+}
+
+// ---------------------------------------------------------------------------
+// Relative clauses, bare subtypes, and riders
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_relative_clause_narrows_the_target_it_follows() {
+    // The 738-card class, now BUILT rather than merely declined honestly.
+    // CR 205 + CR 202.3.
+    let cmc = abilities(
+        "Doom Whisper",
+        "Destroy target creature with mana value 3 or less.",
+    );
+    assert_eq!(
+        cmc[0]["effect"]["target"]["properties"],
+        json!([{"type": "Cmc", "comparator": "LE", "value": {"type": "Fixed", "value": 3}}])
+    );
+
+    let kw = abilities("Whatever", "Destroy target creature with flying.");
+    assert_eq!(
+        kw[0]["effect"]["target"]["properties"],
+        json!([{"type": "WithKeyword", "value": "Flying"}])
+    );
+
+    let power = abilities(
+        "Whatever",
+        "Destroy target creature with power 4 or greater.",
+    );
+    assert_eq!(
+        power[0]["effect"]["target"]["properties"],
+        json!([{
+            "type": "PtComparison",
+            "stat": "Power",
+            "scope": "Current",
+            "comparator": "GE",
+            "value": {"type": "Fixed", "value": 4}
+        }])
+    );
+}
+
+#[test]
+fn a_bare_subtype_needs_no_type_word() {
+    // CR 205.3. Capitalization is the signal, and the closed subtype list is
+    // what recovers the singular: no English rule gets "Elves", "Allies",
+    // "Zombies" and "Plains" all right at once.
+    let plural = abilities("Whatever", "Destroy all Forests.");
+    assert_eq!(plural[0]["effect"]["type"], "DestroyAll");
+    assert_eq!(
+        plural[0]["effect"]["target"]["type_filters"],
+        json!([{"Subtype": "Forest"}])
+    );
+
+    let elves = parsed("Canopy Tactician", "Other Elves you control get +1/+1.")
+        ["static_abilities"]
+        .clone();
+    assert_eq!(
+        elves[0]["affected"]["type_filters"],
+        json!([{"Subtype": "Elf"}])
+    );
+    // The exclusion survives in the filter, so the engine drops the word from
+    // the prose.
+    assert_eq!(elves[0]["description"], "Elves you control get +1/+1.");
+}
+
+#[test]
+fn a_cant_be_regenerated_rider_folds_into_the_destruction_before_it() {
+    // CR 701.15b: printed as its own sentence, but recorded as a FIELD.
+    let v = abilities(
+        "Whatever",
+        "Destroy target nonblack creature. It can't be regenerated.",
+    );
+    assert_eq!(v.as_array().expect("array").len(), 1);
+    assert_eq!(v[0]["effect"]["cant_regenerate"], true);
+    assert_eq!(
+        v[0]["sub_ability"],
+        json!(null),
+        "the rider is not a second effect"
+    );
+}
+
+#[test]
+fn a_pronoun_subject_declines_because_its_referent_is_not_local() {
+    // "It" means the chosen target after "Untap target creature" and the SOURCE
+    // after "Whenever this creature attacks". Which one is decided by whether
+    // an earlier clause chose a target — context the subject grammar does not
+    // have. Declining is honest; guessing would silently mis-aim the effect.
+    let p = parse_card(
+        "Aim High",
+        "Untap target creature. It gets +2/+2 until end of turn.",
+    );
+    assert!(!p.is_complete());
 }
