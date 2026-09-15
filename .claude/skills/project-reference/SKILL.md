@@ -16,6 +16,7 @@ Lookup material for build commands, the verification cadence, architecture, envi
 |----------|-------------|-------------|
 | `clippy` | `cargo clippy --all-targets -- -D warnings` | `crates/` changes |
 | `test-engine` | `cargo nextest run -p phase-engine [-p phase-ai] -E 'package(phase-engine)'` (same package selection as `build-native`, so nothing recompiles) | `crates/engine/src/` changes |
+| `test-engine-focus` | `cargo nextest run <NATIVE_TEST_PACKAGES> -E "package(phase-engine) & ($(cat .tilt-test-focus))"` — same artifacts as `test-engine`, runs only the tests matching the nextest filterset in the gitignored `.tilt-test-focus` (e.g. `test(/agent_frank_horrigan/)`). Fix rounds only; never completion evidence. | Manual: `tilt trigger test-engine-focus` (after writing `.tilt-test-focus`) |
 | `test-ai` | `cargo nextest run -p phase-engine -p phase-ai -E 'package(phase-ai)'` | `crates/engine/src/` or `crates/phase-ai/src/` changes |
 | `wasm` | WASM build (depends on clippy) | engine/AI/WASM src changes |
 | `card-data` | `./scripts/gen-card-data.sh` | `crates/engine/src/` changes |

@@ -140,6 +140,8 @@ For frontend work:
 
 After a non-zero `tilt-wait.sh`, fetch details with `tilt logs <resource> --tail 50 --since 2m`. Distinguish your errors from concurrent-agent errors: if an error appears unrelated to your diff, wait several minutes and re-check before intervening (see `feedback_engine_implementer_runs_review` context — other agents fix their own errors).
 
+**Fix rounds use the focused runner, not the full suite.** When a preparatory run reports a failure in a test you own and the fix touches only test files or a single seam, do not wait another full `test-engine` cycle per attempt: write a nextest filterset naming the failing tests to `.tilt-test-focus` (e.g. `test(/agent_frank_horrigan/)`), run `tilt trigger test-engine-focus`, and read `tilt logs test-engine-focus --since 5m`. It reuses `build-native`'s artifacts, so it costs the incremental compile plus only those tests. Iterate there until green, then let the full `test-engine` run (which the same edit already retriggered) settle before you report — the focus run is never completion evidence, and `verify-card.sh` still waits on the full resource.
+
 ### Parser preparatory gate
 
 If any modified file is under `crates/engine/src/parser/`, inspect added lines for string dispatch:

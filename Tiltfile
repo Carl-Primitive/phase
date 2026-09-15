@@ -261,6 +261,27 @@ local_resource('test-engine',
     labels = ['test'],
 )
 
+# Focused test run for fix rounds. Same NATIVE_TEST_PACKAGES selection, same profile and
+# features as test-engine, so it reuses build-native's artifacts and never recompiles the
+# engine; it only narrows WHICH tests run, via a nextest filterset read from the gitignored
+# file .tilt-test-focus (e.g. `test(/agent_frank_horrigan/)` or
+# `test(/attacked_this_turn/) | test(/source_is_attacking/)`). Manual trigger:
+#     printf 'test(/agent_frank_horrigan/)\n' > .tilt-test-focus && tilt trigger test-engine-focus
+# It is a fix-round tool only — a full-suite test-engine run at the shipped tree is still what
+# verify-card.sh waits on, so a green focus run is never completion evidence.
+local_resource('test-engine-focus',
+    cmd = ['bash', '-c',
+        'f=.tilt-test-focus; if ! [ -s "$f" ]; then echo "test-engine-focus: write a nextest filterset to $f first, e.g. test(/agent_frank_horrigan/)" >&2; exit 2; fi; '
+        + 'cargo nextest run ' + NATIVE_TEST_PACKAGES + ' -E "package(phase-engine) & ($(cat "$f"))"'],
+    deps = ENGINE_SRC + ENGINE_TESTS + ['.tilt-test-focus'],
+    ignore = TMP_IGNORE,
+    resource_deps = ['build-native'],
+    trigger_mode = TRIGGER_MODE_MANUAL,
+    allow_parallel = True,
+    auto_init = False,
+    labels = ['test'],
+)
+
 local_resource('test-ai',
     cmd = 'cargo nextest run ' + NATIVE_TEST_PACKAGES + " -E 'package(phase-ai)'",
     deps = ENGINE_SRC + AI_SRC + AI_TESTS,

@@ -313,7 +313,7 @@ The whole Developer-track verification is one command:
 It runs, in order, and stops nothing early so you see every failure at once:
 
 1. `cargo fmt --all` — the one cargo command Tilt cannot run for you.
-2. `./scripts/tilt-wait.sh clippy test-engine card-data` — waits on the engine loop's warm builds; `tilt-wait.sh` refuses to report on a build older than your last edit, so a green here describes the tree you are shipping.
+2. `./scripts/tilt-wait.sh clippy test-engine card-data` — waits on the engine loop's warm builds; `tilt-wait.sh` refuses to report on a build older than your last edit, so a green here describes the tree you are shipping. While iterating on a failing test of your own, `printf 'test(/<pattern>/)\n' > .tilt-test-focus && tilt trigger test-engine-focus` reruns only the matching tests on the same artifacts; the full `test-engine` run at the final tree is still the gate.
 3. Coverage: the card must be `supported: true, gap_count: 0` in the `coverage-data.json` Tilt's `card-data` resource just wrote (and no other card regressed — CI checks that against the published baseline).
 4. `cargo semantic-audit` — zero findings for the card (a §3.1 fix also removes it from `parser-misparse-backlog.md`). This is the same tool-profile binary `card-data` already built, so it links, it does not rebuild.
 5. Gate A (`./scripts/check-parser-combinators.sh`).

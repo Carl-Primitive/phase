@@ -1,5 +1,7 @@
 # Rust
 /target/
+# nextest filterset for Tilt's manual test-engine-focus resource (fix rounds)
+/.tilt-test-focus
 
 # Node
 node_modules/
