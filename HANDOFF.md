@@ -1,208 +1,302 @@
 # Oracle Parser Rewrite — Handoff
 
 **Branch:** `parser-spike` · **Worktree:** `/Users/carl/coding/phase-parser-spike`
-**Main checkout:** `/Users/carl/coding/phase` (never modified by this work)
-**Status:** spike complete, approach validated, direction changed. Ready for build-out.
+**Main checkout:** `/Users/carl/coding/phase` (read-only: `data/card-data.json` and engine
+sources, never written)
+**Status:** emitting the engine's format directly. Grammar build-out in progress.
 
 ---
 
-## The decision that changed
+## What this is
 
-The spike started with an engine-independent schema. **That is now dropped.**
-A measured bridge from that schema to the engine's JSON reached **95.2% exact
-whole-card match** against `card-data.json` with about twenty minutes of fixes,
-which proved the formats are close enough that independence buys nothing and
-costs upstreamability.
+A lexer-first Oracle parser that produces the EXACT current engine card format,
+verified by JSON equality against `data/card-data.json`, intended as a
+like-for-like replacement the existing parser can be swapped for.
 
-**New goal: a lexer-first parser that emits the EXACT current engine format,**
-verified by byte-for-byte JSON equality against `card-data.json`, submittable
-upstream as a like-for-like replacement.
-
-Format improvements are a **separate, later proposal** (see "Format changes to
-propose"), because changing shape and changing parser at the same time makes any
-regression impossible to attribute.
+The engine-independent schema the spike started with is **retired**. It bridged
+to the engine format at 95.2%, which proved independence bought nothing and cost
+upstreamability. The grammar now produces engine-shaped values directly, so a
+divergence is always a parser bug and never a format disagreement.
 
 ---
 
-## Why this approach is worth building (measured, not asserted)
-
-**Totality holds at corpus scale.** The lexer claims every byte:
+## Measured state (all 35,564 cards with Oracle text)
 
 | | |
 |---|---:|
-| Cards lexed | 35,564 |
 | Tokens emitted | 968,616 |
-| **Unclaimed bytes** | **0** |
-| Clauses through the grammar | 80,299 |
-| **Clauses that silently dropped text** | **0** |
+| **Lexer coverage failures** | **0** |
+| Cards with every line parsed | 4,994 |
+| — of those, **byte-identical to the engine** | **4,748** |
+| — of those, disagreeing with the engine | 246 |
+| Match rate among fully-parsed cards | **95.1%** |
+| Whole-corpus exact-match rate | 13.4% |
+| Lines declined (the work list) | 45,565 |
+| Tests | 120 |
+| Full test cycle | **0.33s** |
+| Source lines across the three crates | 8,059 |
 
-This is the property the existing parser cannot state, and why it needs an
-11,422-line post-hoc auditor (`swallow_check.rs`) that is still in
-"observability only" mode. A test pins the 738-card class the auditor is blind
-to: `Destroy target creature with mana value 3 or less` declines with
-`TrailingTokens` rather than silently widening the target to all creatures.
+Comparison is over EVERY bucket the parser fills — `keywords`, `abilities`,
+`triggers`, `static_abilities` — INCLUDING each ability's `description` prose.
+The spike's 838 figure excluded `description` and compared two buckets, so the
+two numbers are not on the same scale.
 
-**Leverage compounds.** Each row adds ONE production covering a class:
+Two deliberate exceptions, both stated by the harness rather than hidden:
 
-| Grammar state | Clauses parsed | Share |
-|---|---:|---:|
-| 16 effect productions | 1,599 | 2.0% |
-| + subject-sharing conjunction (~30 lines) | 1,931 | 2.4% |
-| + keyword-line production (~50 lines) | 10,693 | 13.3% |
-
-**The loop is fast** because the crates do not depend on `phase-engine`:
-
-| Loop | Time |
-|---|---:|
-| `cargo check -p phase-engine --lib` | 10s |
-| `cargo check -p phase-engine --all-targets` | 2m 40s |
-| spike crates, full test cycle | **0.5s** |
-
-The 16x engine gap is ~1.03M lines of inline `#[cfg(test)]` compiling into the
-crate unit plus the 1,622-module integration binary. Rust is not the bottleneck.
+* **Keyword ORDER** is compared as a multiset. The reference data is not
+  order-stable for that field — the same printed "Flying, deathtouch" is
+  `["Deathtouch","Flying"]` on A-Midnight Assassin and `["Flying","Deathtouch"]`
+  on Aurora of Emrakul. Demanding sequence equality would measure their
+  instability, not this parser's correctness.
+* **21 cards have no Oracle-derived content.** A dual land's mana abilities come
+  from its TYPE LINE, not from any sentence; its whole printed text is reminder
+  text. The parser is not given the type line, so this is an input limit rather
+  than a grammar gap. The harness names that bucket separately.
 
 ---
 
-## What exists now
+## Crates
 
 ```
-crates/phase-oracle-lex/      446 lines src, 256 tests   — text -> tokens+spans
-crates/phase-oracle-parse/    ~900 lines src, 186 tests  — nom grammar over tokens
-crates/phase-card-schema/     ~190 lines                 — TO BE RETIRED, see below
+crates/phase-oracle-lex/     text -> tokens with byte spans
+crates/phase-oracle-ast/     engine-shaped output types (serde mirror)
+crates/phase-oracle-parse/   grammar over tokens -> engine-shaped values
 ```
 
-- `lexer.rs` — the scanner. `verify_coverage()` is the totality invariant.
-- `token.rs` — vocabulary, every variant citing its corpus occurrence count.
-- `stream.rs` — nom `Input` + `Compare` over a token slice. **This is the load-bearing
-  piece**: `tag("destroy target creature")` means "three word tokens spelled thus",
-  so a phrase can never match across a word boundary.
-- `prim.rs` / `target.rs` / `clause.rs` — leaf, target, and clause productions.
-- `bridge.rs` — schema→engine JSON. **Becomes the primary output path.**
-- `examples/corpus_coverage.rs` — lexer totality over all cards.
-- `examples/differential.rs` — clause census + decline diagnosis.
-- `examples/bridge_diff.rs` — exact-match rate vs `card-data.json`.
+None of them depends on `phase-engine`. That is what keeps the loop at 0.33s
+where `cargo check -p phase-engine --all-targets` costs 2m40s, and it is worth
+protecting: the whole method below is "measure, classify, fix a class, measure
+again", which only works when a full corpus pass is seconds rather than minutes.
 
-4 commits, clean tree.
-
----
-
-## Architecture change for the next session
-
-Retire `phase-card-schema` as a separate vocabulary. Instead:
-
-1. Define the parser's output types to **mirror the engine's serde shape exactly**
-   (field names, tags, optionality). Keep them in their own crate so the fast loop
-   survives — the crate still must not depend on `phase-engine`.
-2. Verify by JSON equality against `card-data.json`. That is the whole test
-   strategy and it is cheap and total.
-3. Defer the integration question (how the parser finally lives inside
-   `phase-engine`) until parity is close. Two options, decide later:
-   - extract engine AST types into a shared crate both depend on
-     (`types/ability.rs` has 24 production refs into `crate::game::` — bounded but real), or
-   - port the modules into `crates/engine/src/parser/` at the end and accept the slow loop then.
+| File | What lives here |
+|---|---|
+| `lex/lexer.rs` | The scanner. `verify_coverage()` is the totality invariant. |
+| `lex/token.rs` | Vocabulary, each variant citing its corpus occurrence count. |
+| `parse/stream.rs` | nom `Input`/`Compare` over a token slice. **Load-bearing:** `tag("destroy target creature")` means "three word tokens spelled thus", so a phrase can never match across a word boundary. |
+| `parse/normalize.rs` | Self-reference → `~`, before the lexer. |
+| `parse/prim.rs` | Leaf productions: words, phrases, numbers, quantities, P/T, mana symbols. |
+| `parse/target.rs` | `Subject` (filter + scope + targeted-ness) and the whole filter grammar. |
+| `parse/effect.rs` | Effect productions and the continuous/instant split. |
+| `parse/cost.rs` | The single cost resolver. No caller inspects a component. |
+| `parse/keywords.rs` | Keyword lines that carry an argument (Enchant, Equip). |
+| `parse/trigger.rs` | Trigger heads. |
+| `parse/line.rs` | Line splitting, sentence chaining, declines. |
+| `parse/lib.rs` | `parse_card`, line classification, bucket routing. |
+| `ast/*` | The serde mirror. Field sets were taken from a CENSUS of card-data.json, not from reading the engine's derives. |
 
 ---
 
-## Where the remaining work is (measured)
-
-Declines cluster by category, not by card. 1,665 distinct heads, but the mass is
-in five unbuilt categories of known shape:
-
-| Head | Clauses | Category |
-|---|---:|---|
-| whenever / when / at | 16,401 | triggered abilities (21% of declines) |
-| if | 4,099 | conditions / intervening-if |
-| `{T}` | 3,067 | activated abilities (cost : effect) |
-| this / cardname / it | 4,571 | self-reference predicates |
-| enchant / equip | 1,930 | keyword lines with arguments |
-
-Build order recommendation: **activated abilities → triggers → conditions →
-statics → replacements**, because the cost/effect split is the simplest
-structural addition and unlocks the `{T}` mass immediately.
-
----
-
-## Traps found the hard way
-
-1. **In a git worktree `.git` is a FILE, not a directory.** `.git/info/exclude`
-   writes fail silently and 178 build artifacts landed in the first commit.
-   Use `.gitignore`.
-2. **`touch` alone does not force a cargo rebuild.** Timing runs that only touch a
-   file report 0.1s and prove nothing. Make a real content change, and verify the
-   loop by planting a deliberate compile error.
-3. **`--lib` vs `--all-targets` is a 16x difference.** Always say which you measured.
-4. **Leave Tilt OFF.** It watches the engine source glob and fans one edit out to
-   wasm, test-engine, test-ai, card-data and clippy; five share one target dir and lock.
-5. **`data/*` is gitignored**, so the worktree has no `data/`. Export the corpus
-   from the main checkout (see commands below).
-6. **Verify with the code, not with a throwaway script.** Two of my Python
-   cross-checks were wrong and briefly contradicted a correct lexer. When they
-   disagree, trust the thing under test and re-derive the script.
-7. **Engine format gotchas** the bridge had to reproduce:
-   - keywords are PascalCase with no spaces: `FirstStrike`, not `First strike`
-   - `QuantityExpr` wraps dynamic values: `{"type":"Ref","qty":{"type":"Variable","name":"X"}}`
-   - `GainLife`/`LoseLife` **omit** the player field when the subject is the controller
-   - scope is named in the variant: `Destroy`/`DestroyAll`, `Bounce`/`BounceAll`
-8. **Nested quoting is unresolvable at the lexer level** (`"` is its own open and
-   close). One card, Mijo the Bull. Pinned by test, do not try to "fix" it.
-
----
-
-## Working commands
+## The three commands
 
 ```bash
-# Always, from the worktree:
 cd /Users/carl/coding/phase-parser-spike
 export CARGO_TARGET_DIR=$PWD/target-spike
 
-# Fast loop
-cargo test -p phase-oracle-lex -p phase-oracle-parse
+# Inner loop (0.33s)
+cargo test -p phase-oracle-lex -p phase-oracle-ast -p phase-oracle-parse
 
-# Refresh the corpus export (needs the main checkout's data/)
+# Totality over the corpus
+cargo run -q --release --example corpus_coverage --features corpus \
+  -p phase-oracle-lex -- oracle-corpus.json
+
+# Parity, the number that matters
+cargo run -q --release --example parity --features corpus \
+  -p phase-oracle-parse -- oracle-corpus.json
+#   --show N           print N disagreements in full
+#   PARITY_SAMPLE_DECLINES=1   sample declined lines per production
+
+# ONE card, when a corpus number needs turning back into a production
+cargo run -q --example explain -p phase-oracle-parse -- "Card Name" "Oracle text"
+```
+
+Refresh the corpus export (needs the main checkout's `data/`, which is gitignored):
+
+```bash
 cd /Users/carl/coding/phase && python3 -c "
 import json
 d=json.load(open('data/card-data.json'))
 cov=json.load(open('data/coverage-data.json'))
 sup={c['card_name']: c['supported'] for c in cov['cards']}
-out=[{'n':c['name'],'t':c['oracle_text'],'sup':sup.get(c['name']),
-      'kw':c.get('keywords') or [],'ab':c.get('abilities') or []}
-     for c in d.values() if c.get('oracle_text')]
+BUCKETS=['keywords','abilities','triggers','static_abilities','replacements',
+         'modal','additional_cost','casting_options','casting_restrictions']
+out=[]
+for c in d.values():
+    if not c.get('oracle_text'): continue
+    r={'n':c['name'],'t':c['oracle_text'],'sup':sup.get(c['name'])}
+    for b in BUCKETS:
+        if c.get(b): r[b]=c[b]
+    out.append(r)
 json.dump(out,open('/Users/carl/coding/phase-parser-spike/oracle-corpus.json','w'))
 print('exported',len(out))
 "
-
-# The three measurements
-cargo run -q --release --example corpus_coverage --features corpus -p phase-oracle-lex -- oracle-corpus.json
-cargo run -q --release --example differential --features corpus -- oracle-corpus.json
-cargo run -q --release --example bridge_diff --features corpus -- oracle-corpus.json
 ```
 
 ---
 
-## Success criteria for the build-out
+## The method that produced every gain so far
 
-1. Zero unclaimed tokens across all 35,564 cards, including declined clauses. (holds today)
-2. Exact JSON match rate against `card-data.json` rising toward parity; **never a
-   card that the old parser got right and the new one gets wrong.**
-3. Every decline names a production and carries a span. (holds today)
-4. Inner loop stays under 10s.
-5. Grammar emittable as a printable EBNF artifact. (not yet built)
+Not "read cards and add arms". Every round was:
+
+1. Run `parity --show 600`, pipe it through a structured differ that groups
+   mismatches **by JSON path** rather than by card.
+2. Take the top group. It is always a CLASS — a field the engine spells
+   differently, a coordination rule, a position-dependent shape.
+3. Verify the rule against `card-data.json` with a census before writing code.
+   Several "obvious" rules turned out to be 60/40 splits and were left alone.
+4. Fix it in the one place it belongs. Re-measure.
+
+The differ is worth rebuilding if lost; it is what turns 250 disagreements into
+six actionable lines. `explain` is the companion: it turns one line of that
+output back into a concrete production.
+
+**Verify before generalizing.** Three rules that looked like judgement calls
+turned out to be measurable, and each was settled by a census:
+
+* Ability word versus keyword argument → em-dash SPACING (3,518 spaced vs 439
+  unspaced, nothing between).
+* `Pump` versus `PumpAll` → TARGETING, not plurality (898 vs 536).
+* Which keywords may be hoisted as bare strings → checked card by card that the
+  engine emits nothing else for them (12 candidates failed).
+
+And one that was NOT: `Bounce`'s `selection` field correlates with
+`controller: You` only 93/38. That is a parser quirk in the engine, not a rule,
+so it was left unmodelled rather than guessed at.
+
+---
+
+## Where the remaining work is (measured)
+
+| Production | Declines | What it is |
+|---|---:|---|
+| `spell_effect` | 24,194 | effect vocabulary — the real bottleneck |
+| `trigger_effect` | 6,943 | trigger head parses, body does not |
+| `trigger_head` | 6,443 | unbuilt trigger events |
+| `activated_effect` | 5,759 | same body grammar, after a cost |
+| `ability_cost` | 1,197 | remaining cost shapes |
+| `trigger_body` | 1,029 | head parses but no comma boundary follows |
+
+Three quarters of all declines are the EFFECT BODY grammar, reached through four
+different doors. Work there pays four times.
+
+Named classes visible in the decline samples, roughly by mass:
+
+1. **Modal spells** (~2,900 lines: "Choose one —" plus its `•` bullets).
+   Self-contained: `modal` + `mode_abilities` on the ability.
+2. **Conditions** (~2,100: "as long as", intervening-if, "if you control").
+   Careful — `ControlsType` and `IsPresent` are two engine spellings of
+   apparently the same thing; census the split before picking.
+3. **Effect verbs not yet built**: search library, look at, gain control,
+   prevent damage, copy, attach, dig, put onto the battlefield.
+4. **Keywords with a cost** (cycling, flashback, kicker, ward, crew, morph) —
+   each is a small grammar like `Equip`, and each lowers to the ability or
+   casting option the keyword stands for.
+5. **`~'s` possessive references** (247).
+
+---
+
+## Invariants — do not break these
+
+1. **The lexer claims every byte.** Run `corpus_coverage` after any lexer change.
+   It has been 0 failures / 968,616 tokens throughout.
+2. **A line either parses completely or declines with a span and a production
+   name.** There is no third outcome, and in particular none in which a
+   production succeeds while leaving printed words unaccounted for. This is the
+   property the existing parser's 11,422-line `swallow_check.rs` auditor exists
+   to recover, and it holds here by construction.
+3. **Never regress a card the engine gets right.** `parity` prints that count on
+   its own line labelled stop-the-line. It has never been allowed to stay up.
+4. **Decline rather than guess.** Two live examples worth preserving: a
+   half-understood COST declines the whole ability, because a partially-read
+   cost would make it activatable for less than it prints; and an unrecognized
+   "Activate only …" is left in the effect body so the line declines, rather
+   than silently losing a timing restriction.
+5. **No catch-all variant anywhere in the AST.** Text the grammar cannot express
+   must decline, so coverage stays measurable.
+
+---
+
+## Traps, in the order they cost time
+
+1. **`cargo fmt` reflows multi-line enum variants, arrays and calls.** A patch
+   written against pre-format text then applies to NOTHING and reports success.
+   This silently lost five separate fixes across two sessions, including one
+   that made "deals damage to each opponent" still wrong after being "fixed".
+   Assert the match count before substituting.
+2. **A patch script that asserts and aborts skips every later substitution.**
+   Report per-substitution and continue instead.
+3. **Reminder text must be dropped before the GRAMMAR, not just out of the
+   rendered description.** A reminder after a sentence's period reads as a
+   second, unparseable sentence and fails the whole line. This one bug was worth
+   1,400 cards.
+4. **In a git worktree `.git` is a FILE.** `.git/info/exclude` writes fail
+   silently. Use `.gitignore`.
+5. **`touch` does not force a cargo rebuild.** Timing runs that only touch a file
+   prove nothing. Make a real content change and plant a compile error.
+6. **`--lib` vs `--all-targets` is a 16x difference.** Always say which.
+7. **Leave Tilt OFF.** It watches the engine source glob and fans one edit out to
+   five resources sharing one target dir and lock. Irrelevant to three
+   standalone crates.
+8. **Verify with the code, not a throwaway script.** Several Python cross-checks
+   were wrong and briefly contradicted a correct parser.
+9. **Nested quoting is unresolvable at the lexer level** (`"` is its own open and
+   close). One card, Mijo the Bull. Pinned by test; do not "fix" it.
+
+---
+
+## Engine format facts worth knowing before touching the AST
+
+Each of these was verified against the corpus, and several look like engine
+inconsistencies. They are reproduced rather than tidied: a like-for-like
+replacement must not smuggle in a shape change.
+
+* `GainLife` OMITS the controller (absence means "you"); `LoseLife` PRINTS it.
+* An effect iterated by `player_scope` leaves its own player slot empty.
+* `ChangeZoneAll` carries FOUR fields where `ChangeZone` carries eight —
+  the mass form has no battlefield-entry riders. `BounceAll` has no
+  `destination` where `Bounce` does.
+* A granted keyword is NOT an effect. It is a `StaticAbility` inside a
+  `GenericEffect`, whose `target` holds the chosen object and whose `affected`
+  points back through `ParentTarget`.
+* Only a static ability's LEADING verb is put in the infinitive, so
+  "get +1/+1 and gains flying" keeps the second verb as printed.
+* "Enchanted creature" is `AttachedTo` when a trigger WATCHES it and a typed
+  filter with `EnchantedBy` when a static ability AFFECTS it.
+* A spell-cast trigger does NOT wrap its filter in `StackSpell`; a targeting
+  clause must.
+* `is_mana_ability` and `consumes_source` are COMPUTED riders, not parsed.
+* "card" names the object, not a type: "target Spirit card" is a Spirit.
+* CR 102.1 runs through the whole format — a player is not an object, so an
+  empty `type_filters` is the ONLY spelling of a player-shaped `Typed` filter.
 
 ---
 
 ## Format changes to propose LATER, as a separate PR
 
-Deliberately deferred so a shape change cannot be confused with a parser regression.
+Deliberately deferred so a shape change cannot be confused with a parser
+regression.
 
-1. **Absence encodes a value.** `GainLife` omits `player` to mean "the controller",
-   so a consumer treating absent as unknown is silently wrong. This is the one
-   real correctness hazard and the strongest candidate to fix first.
-2. **Scope named in the variant.** 23 sibling clusters, 48 tags, 5% of the
-   vocabulary: `Destroy`/`DestroyAll`, `Damage`/`DamageAll`/`DamageEachPlayer`.
-   Carry scope on the target instead. The project's own CLAUDE.md names this smell.
-3. **Keywords have two representations** — a `keywords` array for bare lines, an
-   effect for granted ones. Every consumer handles the concept twice.
+1. **Absence encodes a value.** `GainLife` omits `player` to mean "the
+   controller", so a consumer treating absent as unknown is silently wrong. The
+   strongest candidate, and now demonstrably inconsistent with `LoseLife`.
+2. **Scope named in the variant.** `Destroy`/`DestroyAll`, `Bounce`/`BounceAll`,
+   `Pump`/`PumpAll`, `ChangeZone`/`ChangeZoneAll` — and the mass forms do not
+   even carry the same fields. The parser already carries scope on the subject
+   and translates in one place; the engine could too.
+3. **Keywords have two representations** — an array entry for bare lines, an
+   effect for granted ones.
 
 **Do NOT propose changing** `QuantityExpr::Fixed` vs `Ref{QuantityRef}`. That
-layering is correct, the spike's flattened version was worse, and the bridge had
-to restore it.
+layering is correct and the spike's flattened version was worse.
+
+---
+
+## Success criteria
+
+| | |
+|---|---|
+| Zero unclaimed tokens, all 35,564 cards | **holds** (968,616 tokens, 0 failures) |
+| Every decline names a production and carries a span | **holds** |
+| Inner loop under 10s | **holds** (0.33s) |
+| Never a card the old parser got right and the new one gets wrong | **246 outstanding**, tracked and classified |
+| Exact match rate rising toward parity | 13.4% of corpus, 95.1% of parsed cards |
+| Grammar emittable as a printable EBNF artifact | not built |
