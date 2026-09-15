@@ -8,3 +8,11 @@ description = "Grammar over the Oracle token stream -> card schema."
 phase-card-schema = { path = "../phase-card-schema" }
 phase-oracle-lex = { path = "../phase-oracle-lex" }
 nom = "8.0"
+serde_json = { version = "1", optional = true }
+
+[features]
+corpus = ["dep:serde_json"]
+
+[[example]]
+name = "differential"
+required-features = ["corpus"]

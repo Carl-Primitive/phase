@@ -76,3 +76,74 @@ tokens or fails with a span. Totality is structural, not audited. If this holds,
   lock. Irrelevant to three standalone crates. Use it only at integration checkpoints.
 - Dedicated `CARGO_TARGET_DIR=target-spike` (24MB, vs 35GB for the main tree).
 - Isolated git worktree so the main checkout is never disturbed.
+
+---
+
+# Phase 1–3 results (2026-09-15)
+
+## Totality: CONFIRMED at corpus scale
+
+| Measure | Result |
+|---|---:|
+| Cards lexed | 35,564 |
+| Tokens emitted | 968,616 |
+| **Unclaimed bytes** | **0** |
+| Clauses parsed through the grammar | 80,299 |
+| **Clauses that silently dropped printed text** | **0** |
+
+Every decline names the production that refused and carries the span. The
+738-card "dropped relative clause on target" class is pinned as structurally
+impossible by test: `Destroy target creature with mana value 3 or less`
+declines with `TrailingTokens` rather than widening the target.
+
+## Leverage: CONFIRMED, and it compounds
+
+Each row adds ONE production covering a class, never a card:
+
+| Grammar state | Clauses parsed | Share |
+|---|---:|---:|
+| 16 effect productions | 1,599 | 2.0% |
+| + subject-sharing conjunction (~30 lines) | 1,931 | 2.4% |
+| + keyword-line production (~50 lines) | 10,693 | 13.3% |
+
+The keyword-line production alone moved 8,762 clauses. All 17 grammar tests
+stayed green across both additions.
+
+## Differential vs the existing parser
+
+Within the targeted slice (plain effect sentences, no trigger/cost/static):
+
+| Bucket | Count |
+|---|---:|
+| Slice cards | 11,025 |
+| Fully parsed by the new grammar | 830 |
+| Agree with existing parser | 830 |
+| **New worse (existing parsed, new is WRONG)** | **0** |
+| New better | 0 |
+| Not yet implemented | 8,970 |
+
+No regressions. No wins yet either: the grammar is a strict subset so far.
+
+## Where the remaining work is
+
+Declines cluster by category, not by card. Top heads:
+
+| Head | Clauses | Category |
+|---|---:|---|
+| whenever / when / at | 16,401 | triggered abilities (21% of declines) |
+| if | 4,099 | conditions |
+| `{T}` | 3,067 | activated abilities |
+| this / cardname / it | 4,571 | self-reference predicates |
+| enchant / equip | 1,930 | keyword lines with arguments |
+
+1,665 distinct declining heads, but the mass is in five unbuilt *categories*,
+each of known shape. That is a work list over the grammar, not a grind over cards.
+
+## Honest limits
+
+- 13.3% clause coverage against the existing parser's 89% card coverage. The gap
+  is scope, not architecture: ~16 of 932 vocabulary tags are implemented.
+- Nested quoting is unresolvable at the lexer level (1 card, pinned by test).
+- Reaching parity needs triggers, activated abilities, statics, replacements and
+  conditions. The measured shape of the declines supports the original 2–3 week
+  estimate for the top-50 slice.

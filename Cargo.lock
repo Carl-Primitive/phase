@@ -2004,6 +2004,7 @@ dependencies = [
  "nom",
  "phase-card-schema",
  "phase-oracle-lex",
+ "serde_json",
 ]
 
 [[package]]
