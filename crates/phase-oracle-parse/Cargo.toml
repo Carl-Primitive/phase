@@ -17,3 +17,6 @@ corpus = []
 [[example]]
 name = "parity"
 required-features = ["corpus"]
+
+[[example]]
+name = "explain"

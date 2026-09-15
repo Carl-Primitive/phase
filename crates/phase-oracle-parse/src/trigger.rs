@@ -142,6 +142,14 @@ fn watched(i: In<'_>) -> R<'_, TargetFilter> {
 fn event_head(i: In<'_>) -> R<'_, TriggerHead> {
     let (r, _) = any_of(&["when", "whenever"])(i)?;
 
+    // "whenever you attack" watches the CONTROLLER's attack as a whole, not any
+    // one creature, so it has its own mode and no watched object. Read before
+    // the general path, where "you" would otherwise parse as an ordinary
+    // subject and "attack" as that subject's event.
+    if let Ok((r2, _)) = phrase("you attack")(r) {
+        return Ok((r2, TriggerHead::mode(TriggerMode::YouAttack)));
+    }
+
     // "you cast" / "a player casts" is a spell-cast trigger, whose watched
     // object is the SPELL rather than the subject that cast it.
     if let Ok((r2, _)) = phrase("you cast")(r) {

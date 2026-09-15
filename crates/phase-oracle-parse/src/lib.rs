@@ -23,8 +23,8 @@ pub mod target;
 pub mod trigger;
 
 use phase_oracle_ast::{
-    AbilityCost, AbilityDefinition, AbilityKind, ActivationRestriction, CardOutput, SubAbilityLink,
-    TriggerDefinition,
+    AbilityCost, AbilityDefinition, AbilityKind, ActivationRestriction, CardOutput, Keyword,
+    SubAbilityLink, TriggerDefinition,
 };
 use phase_oracle_lex::{lex, Token, TokenKind};
 
@@ -47,7 +47,17 @@ impl CardParse {
 /// Parse one card.
 pub fn parse_card(name: &str, oracle: &str) -> CardParse {
     let src = normalize::normalize(name, oracle);
-    let toks = lex(&src);
+
+    // Reminder text restates rules rather than creating them, and it is the one
+    // span the grammar may discard — the lexer has already proved each one is a
+    // complete parenthesised unit, so dropping it cannot lose a partial clause.
+    // It must go BEFORE the grammar rather than only out of the rendered
+    // description: a reminder sitting after a sentence's period would otherwise
+    // read as a second, unparseable sentence and fail the whole line.
+    let toks: Vec<Token> = lex(&src)
+        .into_iter()
+        .filter(|t| !matches!(t.kind, TokenKind::Reminder { .. }))
+        .collect();
 
     let mut out = CardOutput::default();
     let mut declines = Vec::new();
@@ -104,7 +114,7 @@ fn fold_spell_run(run: Vec<(Vec<line::Part>, String)>) -> Option<AbilityDefiniti
 }
 
 enum Lowered {
-    Keywords(Vec<String>),
+    Keywords(Vec<Keyword>),
     /// A spell line, left unassembled so consecutive ones can fold together.
     SpellBody(Vec<line::Part>, String),
     /// A line that is the permanent's own continuous ability. CR 611.2: an
@@ -161,12 +171,12 @@ fn top_level_colon(toks: &[Token]) -> Option<usize> {
 /// One production covering the whole evergreen set, rather than one arm per
 /// keyword. Anything outside the printed vocabulary declines here and is tried
 /// as an ability instead.
-fn keyword_line(i: Tokens<'_>) -> Option<Vec<String>> {
+fn keyword_line(i: Tokens<'_>) -> Option<Vec<Keyword>> {
     let mut rest = i;
     let mut out = Vec::new();
     loop {
-        let (r, (pascal, _printed)) = effect::keyword_word(rest).ok()?;
-        out.push(pascal);
+        let (r, kw) = bare_keyword(rest)?;
+        out.push(kw);
         rest = r;
         match rest.first() {
             Some(t) if t.kind == TokenKind::Comma => rest = rest.take_from_n(1),
@@ -174,6 +184,24 @@ fn keyword_line(i: Tokens<'_>) -> Option<Vec<String>> {
         }
     }
     line::is_exhausted(rest).then_some(out)
+}
+
+/// One keyword in bare-line position, simple or parameterized.
+fn bare_keyword(i: Tokens<'_>) -> Option<(Tokens<'_>, Keyword)> {
+    // CR 702.14: landwalk is one keyword carrying a land type, so it is read
+    // before the simple vocabulary rather than being five lookalike entries.
+    if let Some(w) = i.first_word() {
+        if let Some(land) = effect::landwalk(&w) {
+            return Some((
+                i.take_from_n(1),
+                Keyword::Landwalk {
+                    land_type: land.to_string(),
+                },
+            ));
+        }
+    }
+    let (r, (pascal, _printed)) = effect::keyword_word(i).ok()?;
+    Some((r, Keyword::Simple(pascal)))
 }
 
 /// `<cost> : <effect>` — an activated ability. CR 602.

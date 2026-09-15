@@ -44,10 +44,26 @@ use serde::Serialize;
 /// hoists bare keyword lines into `keywords`, puts activated and spell
 /// abilities in `abilities`, and gives triggers their own array. Each is
 /// omitted from the card record entirely when empty.
+/// A keyword as the engine prints it in a card's `keywords` array.
+///
+/// Most print as a bare string, but a PARAMETERIZED keyword prints as an object
+/// carrying its argument. Landwalk is the shape this grammar produces today:
+/// "swampwalk" is not a keyword named Swampwalk, it is Landwalk of Swamp, and
+/// flattening it to a string would lose the land type every consumer needs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(untagged)]
+pub enum Keyword {
+    Simple(String),
+    Landwalk {
+        #[serde(rename = "Landwalk")]
+        land_type: String,
+    },
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
 pub struct CardOutput {
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub keywords: Vec<String>,
+    pub keywords: Vec<Keyword>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub abilities: Vec<AbilityDefinition>,
     #[serde(skip_serializing_if = "Vec::is_empty")]

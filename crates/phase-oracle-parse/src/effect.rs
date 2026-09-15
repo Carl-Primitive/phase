@@ -458,8 +458,10 @@ fn create_token(i: In<'_>) -> R<'_, Effect> {
     // "with flying" / "with flying and vigilance"
     let (r, keywords) = token_keywords(r);
 
-    // "that are tapped and attacking" / "that's tapped"
-    let (r, tapped, attacking) = token_entry_state(r);
+    // "that are tapped and attacking" / "that's tapped", the trailing spelling
+    // of the same two flags the body can carry inline.
+    let (r, trailing_tapped, attacking) = token_entry_state(r);
+    let tapped = t.tapped || trailing_tapped;
 
     let (power, toughness) = pt.unwrap_or((0, 0));
     Ok((
@@ -813,6 +815,18 @@ fn predicate<'a>(s: &Subject, i: In<'a>) -> R<'a, Predicate> {
 /// A closed list on purpose: an unrecognized word after "gains" is far more
 /// likely to be an unparsed phrase than a keyword, and guessing would make the
 /// grammar claim clauses it does not understand.
+/// Keywords the engine hoists into a card's `keywords` array as a BARE STRING.
+///
+/// Derived from the corpus, not from intuition: for each candidate, every card
+/// whose entire Oracle text is that one keyword was checked to confirm the
+/// engine emits nothing else for it. Keywords that also generate a trigger or a
+/// static ability (evolve, exalted, unleash, extort, flanking, persist,
+/// undying, changeling, mentor, myriad, provoke, dethrone) are deliberately
+/// ABSENT: claiming them here would hoist the keyword and silently drop the
+/// behaviour it stands for.
+///
+/// Landwalk is absent for a different reason — it is parameterized, and
+/// [`landwalk`] handles it.
 const KEYWORDS: &[&str] = &[
     "flying",
     "trample",
@@ -832,44 +846,31 @@ const KEYWORDS: &[&str] = &[
     "banding",
     "infect",
     "wither",
-    "changeling",
-    "persist",
-    "undying",
-    "exalted",
-    "prowess",
-    "skulk",
     "horsemanship",
     "shadow",
     "devoid",
-    "ingest",
-    "myriad",
-    "melee",
-    "mentor",
-    "afterlife",
+    "prowess",
+    "skulk",
     "convoke",
     "delve",
     "cascade",
-    "storm",
-    "islandwalk",
-    "swampwalk",
-    "forestwalk",
-    "mountainwalk",
-    "plainswalk",
-    "flanking",
-    "provoke",
-    "soulbond",
-    "unleash",
-    "evolve",
-    "extort",
-    "battalion",
-    "toxic",
-    "decayed",
+    "improvise",
     "daybound",
     "nightbound",
-    "exploit",
-    "dethrone",
-    "improvise",
 ];
+
+/// CR 702.14: landwalk, which is ONE keyword parameterized by a land type
+/// rather than five keywords that happen to rhyme.
+pub fn landwalk(w: &str) -> Option<&'static str> {
+    Some(match w {
+        "plainswalk" => "Plains",
+        "islandwalk" => "Island",
+        "swampwalk" => "Swamp",
+        "mountainwalk" => "Mountain",
+        "forestwalk" => "Forest",
+        _ => return None,
+    })
+}
 
 /// One keyword, yielding the engine's PascalCase name and the printed spelling.
 ///

@@ -137,6 +137,8 @@ fn state_prop(w: &str) -> Option<FilterProp> {
         "unblocked" => FilterProp::Unblocked,
         "token" => FilterProp::Token,
         "nontoken" => FilterProp::NonToken,
+        "commander" => FilterProp::IsCommander,
+        "face-down" => FilterProp::FaceDown,
         _ => return None,
     })
 }
@@ -399,12 +401,23 @@ fn spell_on_the_stack(i: In<'_>) -> R<'_, TargetFilter> {
         return Ok((r, TargetFilter::StackSpell));
     }
     // "<type list> spell" — the types restrict WHAT KIND of spell.
+    //
+    // The conjunction distributes INTO each alternative rather than wrapping
+    // the disjunction: "artifact or enchantment spell" is (spell AND artifact)
+    // or (spell AND enchantment). Either evaluates the same, but the engine's
+    // shape is the distributed one and this is a like-for-like replacement.
     let (r, types) = typed_filter_list(i)?;
     let (r, _) = any_of(&["spell", "spells"])(r)?;
+    let with_stack = |f: TargetFilter| TargetFilter::And {
+        filters: vec![TargetFilter::StackSpell, f],
+    };
     Ok((
         r,
-        TargetFilter::And {
-            filters: vec![TargetFilter::StackSpell, types],
+        match types {
+            TargetFilter::Or { filters } => TargetFilter::Or {
+                filters: filters.into_iter().map(with_stack).collect(),
+            },
+            other => with_stack(other),
         },
     ))
 }
@@ -661,14 +674,32 @@ pub fn target(i: In<'_>) -> R<'_, Subject> {
 /// type. The engine's `types` list is core types first and then subtypes, which
 /// is the reverse of the printed order for the subtype half — hence one place
 /// that reorders, rather than every caller knowing.
+/// Tokens whose definition supplies the Artifact type the sentence omits.
+const PREDEFINED_ARTIFACT_TOKENS: &[&str] = &[
+    "Treasure",
+    "Food",
+    "Powerstone",
+    "Blood",
+    "Clue",
+    "Lander",
+    "Map",
+    "Junk",
+    "Gold",
+    "Shard",
+];
+
 pub struct TokenBody {
     pub name: String,
     pub types: Vec<String>,
     pub colors: Vec<ManaColor>,
+    /// "create a TAPPED Treasure token" — the same flag a trailing "that are
+    /// tapped" clause sets, printed inside the body instead.
+    pub tapped: bool,
 }
 
 pub fn token_body(i: In<'_>) -> R<'_, TokenBody> {
     let mut i = i;
+    let mut tapped = false;
     let mut colors = Vec::new();
     let mut subtypes: Vec<String> = Vec::new();
     let mut core: Vec<String> = Vec::new();
@@ -678,7 +709,9 @@ pub fn token_body(i: In<'_>) -> R<'_, TokenBody> {
         if matches!(w.as_str(), "token" | "tokens") {
             break;
         }
-        if let Some(c) = color(&w) {
+        if w == "tapped" {
+            tapped = true;
+        } else if let Some(c) = color(&w) {
             colors.push(c);
         } else if w == "and" && !colors.is_empty() {
             // "3/3 blue and red Elemental" — the conjunction joins colours.
@@ -708,6 +741,17 @@ pub fn token_body(i: In<'_>) -> R<'_, TokenBody> {
         return fail(i);
     }
 
+    // CR 111.9: a predefined token's card type is not printed — "create a
+    // Treasure token" names only the subtype, and the Artifact type is implied
+    // by the token's definition rather than by the sentence.
+    if core.is_empty()
+        && subtypes
+            .iter()
+            .all(|s| PREDEFINED_ARTIFACT_TOKENS.contains(&s.as_str()))
+    {
+        core.push("Artifact".to_string());
+    }
+
     // The token's name is its last printed subtype ("Phyrexian Wurm" keeps
     // both words, so the whole subtype run is the name).
     let name = if subtypes.is_empty() {
@@ -724,6 +768,7 @@ pub fn token_body(i: In<'_>) -> R<'_, TokenBody> {
             name,
             types,
             colors,
+            tapped,
         },
     ))
 }

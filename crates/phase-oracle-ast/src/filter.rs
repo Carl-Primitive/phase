@@ -123,6 +123,10 @@ pub enum FilterProp {
     },
     EnchantedBy,
     EquippedBy,
+    /// CR 903.3: the object is a commander.
+    IsCommander,
+    /// CR 708.2: the object is a face-down permanent.
+    FaceDown,
     /// CR 303.4 / CR 301.5: the object has SOME attachment of this kind, as
     /// opposed to being the specific host of this source. "Enchanted creatures
     /// you control" (plural) is this; "enchanted creature" (the Aura's own

@@ -993,3 +993,100 @@ fn an_iterated_clause_leaves_its_player_slot_empty() {
     );
     assert_eq!(e["player_scope"], json!({"type": "Opponent"}));
 }
+
+// ---------------------------------------------------------------------------
+// Reminder text, keyword vocabulary, predefined tokens
+// ---------------------------------------------------------------------------
+
+#[test]
+fn reminder_text_is_dropped_before_the_grammar_not_just_before_the_description() {
+    // A reminder sitting after a sentence's period would otherwise read as a
+    // second, unparseable sentence and fail the whole line. This is the one
+    // span the grammar may discard: the lexer proved it is a complete
+    // parenthesised unit, so dropping it cannot lose a partial clause.
+    let v = triggers(
+        "Automatic Librarian",
+        "When this creature enters, scry 2. (Look at the top two cards of your library, then put any number of them on the bottom and the rest on top in any order.)",
+    );
+    assert_eq!(v[0]["execute"]["effect"]["type"], "Scry");
+    assert_eq!(v[0]["description"], "When ~ enters, scry 2.");
+}
+
+#[test]
+fn a_keyword_that_also_creates_a_trigger_is_not_hoisted_as_a_bare_keyword() {
+    // Evolve prints as one word but stands for a triggered ability. Hoisting it
+    // into `keywords` would silently drop the behaviour, so it declines until
+    // the trigger it stands for can be synthesized.
+    let p = parse_card("Adaptive Snapjaw", "Evolve");
+    assert!(
+        !p.is_complete(),
+        "must not claim a keyword whose behaviour it drops"
+    );
+    assert!(p.out.keywords.is_empty());
+}
+
+#[test]
+fn landwalk_is_one_parameterized_keyword_not_five_lookalikes() {
+    // CR 702.14. "Swampwalk" is not a keyword named Swampwalk; it is Landwalk
+    // of Swamp, and flattening it to a string loses the land type.
+    let v = parsed("Anaconda", "Swampwalk");
+    assert_eq!(v["keywords"], json!([{"Landwalk": "Swamp"}]));
+    let i = parsed("Whatever", "Islandwalk");
+    assert_eq!(i["keywords"], json!([{"Landwalk": "Island"}]));
+}
+
+#[test]
+fn a_predefined_token_supplies_the_card_type_its_sentence_omits() {
+    // CR 111.9: "create a Treasure token" names only the subtype.
+    let v = abilities("Whatever", "Create a Treasure token.");
+    assert_eq!(v[0]["effect"]["types"], json!(["Artifact", "Treasure"]));
+    assert_eq!(v[0]["effect"]["name"], "Treasure");
+}
+
+#[test]
+fn a_tapped_token_can_say_so_inline_or_in_a_trailing_clause() {
+    let inline = abilities("Argothian Opportunist", "Create a tapped Powerstone token.");
+    assert_eq!(inline[0]["effect"]["tapped"], true);
+    assert_eq!(
+        inline[0]["effect"]["types"],
+        json!(["Artifact", "Powerstone"])
+    );
+
+    let trailing = abilities(
+        "Whatever",
+        "Create a 1/1 white Soldier creature token that's tapped.",
+    );
+    assert_eq!(trailing[0]["effect"]["tapped"], true);
+}
+
+#[test]
+fn a_spell_type_restriction_distributes_into_each_alternative() {
+    // "artifact or enchantment spell" is (spell AND artifact) or (spell AND
+    // enchantment) — the engine's shape is the distributed one.
+    let v = abilities("Annul", "Counter target artifact or enchantment spell.");
+    let t = &v[0]["effect"]["target"];
+    assert_eq!(t["type"], "Or");
+    assert_eq!(t["filters"][0]["type"], "And");
+    assert_eq!(t["filters"][0]["filters"][0], json!({"type": "StackSpell"}));
+    assert_eq!(
+        t["filters"][0]["filters"][1]["type_filters"],
+        json!(["Artifact"])
+    );
+    assert_eq!(
+        t["filters"][1]["filters"][1]["type_filters"],
+        json!(["Enchantment"])
+    );
+}
+
+#[test]
+fn attacking_with_your_team_is_a_different_event_from_one_creature_attacking() {
+    // "Whenever you attack" watches the attack step as a whole and has no
+    // watched object; "whenever ~ attacks" watches one creature.
+    let team = triggers("Bard, Heir of Girion", "Whenever you attack, draw a card.");
+    assert_eq!(team[0]["mode"], "YouAttack");
+    assert_eq!(team[0]["valid_card"], json!(null));
+
+    let one = triggers("Whatever", "Whenever ~ attacks, draw a card.");
+    assert_eq!(one[0]["mode"], "Attacks");
+    assert_eq!(one[0]["valid_card"], json!({"type": "SelfRef"}));
+}

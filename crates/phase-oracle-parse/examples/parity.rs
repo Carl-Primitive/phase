@@ -145,7 +145,13 @@ fn main() {
         // A card the OLD parser lowered to something, where the new parser
         // claims completeness but disagrees. This is the stop-the-line bucket.
         regressions += 1;
-        let bucket = if let Some(b) = their_extra {
+        let bucket = if p.out.is_empty() {
+            // The card's whole Oracle text was reminder text, so the engine's
+            // abilities came from its TYPE LINE (a dual land's mana abilities)
+            // rather than from any sentence. Not a grammar gap: the input this
+            // parser is given does not contain the information.
+            "no oracle-derived content"
+        } else if let Some(b) = their_extra {
             match *b {
                 "replacements" => "dropped: replacements",
                 "modal" => "dropped: modal",
