@@ -4,7 +4,10 @@
 //! the single authority that turns that list into an [`AbilityCost`]; no caller
 //! ever inspects an individual component.
 
-use phase_oracle_ast::{AbilityCost, ManaCost, Quantity, SacrificeCost};
+use phase_oracle_ast::{
+    AbilityCost, CounterMatch, CounterSelection, ManaCost, Quantity, SacrificeCost, TapRequirement,
+    TapRequirementKind, TargetFilter,
+};
 use phase_oracle_lex::{PtPart, Sign, TokenKind};
 
 use crate::prim::{any_of, fail, mana_symbol, number, phrase, word, In, ManaSym, R};
@@ -33,6 +36,37 @@ fn mana_cost(i: In<'_>) -> R<'_, AbilityCost> {
         rest,
         AbilityCost::Mana {
             cost: ManaCost::Cost { shards, generic },
+        },
+    ))
+}
+
+/// Strip the `Untapped` property a tap cost states redundantly.
+fn drop_untapped(f: &mut TargetFilter) {
+    match f {
+        TargetFilter::Typed(t) => t
+            .properties
+            .retain(|p| !matches!(p, phase_oracle_ast::FilterProp::Untapped)),
+        TargetFilter::Or { filters } | TargetFilter::And { filters } => {
+            for inner in filters {
+                drop_untapped(inner);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Which counter kind a removal cost names.
+fn counter_match(i: In<'_>) -> R<'_, CounterMatch> {
+    // "Remove A counter from ~" with no kind is the untyped form, resolved to
+    // one concrete kind at payment time.
+    if matches!(i.first_word().as_deref(), Some("counter" | "counters")) {
+        return Ok((i, CounterMatch::Any));
+    }
+    let (r, kind) = crate::prim::counter_type(i)?;
+    Ok((
+        r,
+        CounterMatch::OfType {
+            data: kind.key().to_string(),
         },
     ))
 }
@@ -76,13 +110,70 @@ fn component(i: In<'_>) -> R<'_, AbilityCost> {
         return Ok(v);
     }
     if let Ok((r, _)) = word("sacrifice")(i) {
+        // "Sacrifice three other creatures" — the count is printed before the
+        // noun, so it is read here rather than assumed to be one.
+        let (r, count) = match crate::prim::number(r) {
+            Ok((r2, n)) if n > 0 => (r2, n as u32),
+            _ => (r, 1),
+        };
         let (r, s) = subject(r)?;
         return Ok((
             r,
             AbilityCost::Sacrifice(SacrificeCost {
                 target: s.filter,
-                count: 1,
+                count,
             }),
+        ));
+    }
+
+    // "Remove a +1/+1 counter from ~" / "Remove two charge counters from ~"
+    if let Ok((r, _)) = word("remove")(i) {
+        let (r, count) = match crate::prim::number(r) {
+            Ok((r2, n)) if n > 0 => (r2, n as u32),
+            _ => (r, 1),
+        };
+        let (r, kind) = counter_match(r)?;
+        let (r, _) = any_of(&["counter", "counters"])(r)?;
+        let (r, _) = word("from")(r)?;
+        let (r, s) = subject(r)?;
+        // A removal from the source itself leaves the slot empty: the cost is
+        // already anchored to the ability's own permanent.
+        let target = match s.filter {
+            TargetFilter::SelfRef => None,
+            other => Some(other),
+        };
+        return Ok((
+            r,
+            AbilityCost::RemoveCounter {
+                count,
+                counter_type: kind,
+                target,
+                selection: CounterSelection::SingleObject,
+            },
+        ));
+    }
+
+    // "Tap two untapped artifacts you control" — CR 601.2b. Not the source's
+    // own `{T}`, which `tap_symbol` already handled.
+    if let Ok((r, _)) = word("tap")(i) {
+        let (r, count) = match crate::prim::number(r) {
+            Ok((r2, n)) if n > 0 => (r2, n as u32),
+            _ => (r, 1),
+        };
+        let (r, mut s) = subject(r)?;
+        // "Tap an UNTAPPED creature you control": being untapped is what the
+        // cost requires, not what it selects for, so the engine leaves it out
+        // of the filter. Keeping it would double the constraint.
+        drop_untapped(&mut s.filter);
+        return Ok((
+            r,
+            AbilityCost::TapCreatures {
+                requirement: TapRequirement {
+                    requirement: TapRequirementKind::Count,
+                    count,
+                },
+                filter: s.filter,
+            },
         ));
     }
     if let Ok((r, _)) = word("discard")(i) {
@@ -91,12 +182,18 @@ fn component(i: In<'_>) -> R<'_, AbilityCost> {
             Err(_) => (r, Quantity::fixed(1)),
         };
         let (r, _) = any_of(&["card", "cards"])(r)?;
+        // "Discard a card AT RANDOM" — the manner of choosing is part of the
+        // cost, not a separate clause.
+        let (r, random) = match phrase("at random")(r) {
+            Ok((r2, _)) => (r2, true),
+            Err(_) => (r, false),
+        };
         return Ok((
             r,
             AbilityCost::Discard {
                 count: q,
                 filter: None,
-                selection_random: false,
+                selection_random: random,
                 self_scope: false,
             },
         ));

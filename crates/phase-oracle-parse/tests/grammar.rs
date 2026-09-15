@@ -1229,3 +1229,95 @@ fn multicolored_is_a_colour_count_rather_than_a_flag() {
         json!([{"type": "ColorCount", "comparator": "GE", "count": 2}])
     );
 }
+
+// ---------------------------------------------------------------------------
+// Cost components
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_counter_removal_cost_reads_its_kind_and_its_count() {
+    // CR 122.1 + CR 601.2h.
+    let v = abilities(
+        "Whatever",
+        "{1}, Remove two charge counters from ~: Draw a card.",
+    );
+    assert_eq!(
+        v[0]["cost"]["costs"][1],
+        json!({
+            "type": "RemoveCounter",
+            "count": 2,
+            "counter_type": {"type": "OfType", "data": "charge"},
+            "target": null,
+            "selection": "SingleObject"
+        })
+    );
+}
+
+#[test]
+fn an_untyped_counter_removal_stays_untyped() {
+    // "Remove a counter from ~" names no kind; the payment resolves one.
+    let v = abilities("Whatever", "Remove a counter from ~: Draw a card.");
+    assert_eq!(v[0]["cost"]["counter_type"], json!({"type": "Any"}));
+}
+
+#[test]
+fn tapping_other_objects_is_a_different_cost_from_the_sources_own_tap_symbol() {
+    // CR 601.2b. And being untapped is what the cost REQUIRES, not what it
+    // selects for, so the engine leaves it out of the filter.
+    let v = abilities(
+        "Bramblesnap",
+        "Tap an untapped creature you control: ~ gets +1/+1 until end of turn.",
+    );
+    assert_eq!(
+        v[0]["cost"],
+        json!({
+            "type": "TapCreatures",
+            "requirement": {"requirement": "count", "count": 1},
+            "filter": {
+                "type": "Typed",
+                "type_filters": ["Creature"],
+                "controller": "You",
+                "properties": []
+            }
+        })
+    );
+
+    let own = abilities("Prodigal Sorcerer", "{T}: ~ deals 1 damage to any target.");
+    assert_eq!(own[0]["cost"], json!({"type": "Tap"}));
+}
+
+#[test]
+fn a_sacrifice_cost_reads_a_count_greater_than_one() {
+    let v = abilities("Whatever", "Sacrifice three other creatures: Draw a card.");
+    assert_eq!(
+        v[0]["cost"],
+        json!({
+            "type": "Sacrifice",
+            "target": {
+                "type": "Typed",
+                "type_filters": ["Creature"],
+                "controller": null,
+                "properties": [{"type": "Another"}]
+            },
+            "count": 3
+        })
+    );
+}
+
+#[test]
+fn discarding_at_random_is_part_of_the_cost_not_a_separate_clause() {
+    let v = abilities(
+        "Whatever",
+        "{1}{R}, Discard a card at random: ~ deals 1 damage to any target.",
+    );
+    assert_eq!(
+        v[0]["cost"]["costs"][1],
+        json!({
+            "type": "Discard",
+            "count": {"type": "Fixed", "value": 1},
+            "filter": null,
+            "random": true,
+            "self_ref": false
+        })
+    );
+}

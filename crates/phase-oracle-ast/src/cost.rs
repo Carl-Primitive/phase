@@ -129,11 +129,54 @@ pub enum AbilityCost {
         #[serde(rename = "self_ref")]
         self_scope: bool,
     },
+    /// CR 122.1 + CR 601.2h: remove counters as a cost.
+    RemoveCounter {
+        count: u32,
+        counter_type: CounterMatch,
+        target: Option<TargetFilter>,
+        selection: CounterSelection,
+    },
+    /// CR 601.2b: tap objects OTHER than the source as a cost. Distinct from
+    /// `Tap`, which is the source's own `{T}` symbol.
+    TapCreatures {
+        requirement: TapRequirement,
+        filter: TargetFilter,
+    },
     /// All listed sub-costs must be paid. This is the AND-composition; the
     /// engine's `OneOf` is the OR-composition and is a separate variant.
     Composite {
         costs: Vec<AbilityCost>,
     },
+}
+
+/// Which counters a removal cost accepts.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum CounterMatch {
+    /// An untyped "remove a counter", resolved to one concrete kind at payment.
+    Any,
+    OfType {
+        data: String,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CounterSelection {
+    SingleObject,
+}
+
+/// A fixed count, as opposed to the aggregate "any number with total power N"
+/// form the engine also supports for Crew and Saddle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TapRequirement {
+    pub requirement: TapRequirementKind,
+    pub count: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TapRequirementKind {
+    Count,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -27,7 +27,10 @@ pub use ability::{
     AbilityDefinition, AbilityKind, AbilityTag, ActivationRestriction, Duration, PlayerScope,
     SubAbilityLink,
 };
-pub use cost::{AbilityCost, ManaCost, ManaShard, SacrificeCost};
+pub use cost::{
+    AbilityCost, CounterMatch, CounterSelection, ManaCost, ManaShard, SacrificeCost,
+    TapRequirement, TapRequirementKind,
+};
 pub use effect::{ChoiceTiming, CounterType, Effect, ManaProduced, TapScope, TapState, ZoneName};
 pub use filter::{
     AttachmentKind, Comparator, ControllerRef, FilterProp, ManaColor, TargetFilter, TypeFilter,
