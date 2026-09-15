@@ -103,7 +103,7 @@ fn whose(i: In<'_>) -> Option<(In<'_>, Option<serde_json::Value>)> {
     if let Ok((r, _)) = phrase("each opponent's")(i) {
         return Some((r, Some(json!({"type": "OnlyDuringOpponentsTurn"}))));
     }
-    const ANY_TURN: &[(&str, ())] = &[("each player's", ()), ("the", ())];
+    const ANY_TURN: &[(&str, ())] = &[("each player's", ()), ("each", ()), ("the", ())];
     if let Ok((r, _)) = phrase_alt(ANY_TURN)(i) {
         return Some((r, None));
     }
@@ -150,6 +150,29 @@ fn cast_filter(i: In<'_>) -> R<'_, TargetFilter> {
 /// creature dies" watches every one of them — so scope is discarded here
 /// rather than being carried into a `*All` effect variant.
 fn watched(i: In<'_>) -> R<'_, TargetFilter> {
+    let (mut rest, first) = watched_one(i)?;
+    let mut parts = vec![first];
+
+    // "Whenever ~ OR ANOTHER CREATURE dies" watches either, which the engine
+    // spells as a disjunction rather than as two triggers.
+    while let Ok((r, _)) = word("or")(rest) {
+        match watched_one(r) {
+            Ok((r2, next)) => {
+                parts.push(next);
+                rest = r2;
+            }
+            Err(_) => break,
+        }
+    }
+
+    if parts.len() == 1 {
+        return Ok((rest, parts.pop().expect("one element")));
+    }
+    Ok((rest, TargetFilter::Or { filters: parts }))
+}
+
+/// One alternative in a watched-object list.
+fn watched_one(i: In<'_>) -> R<'_, TargetFilter> {
     if let Ok((r, _)) = self_ref(i) {
         return Ok((r, TargetFilter::SelfRef));
     }
@@ -196,6 +219,12 @@ fn event_head(i: In<'_>) -> R<'_, TriggerHead> {
 
     // "you cast" / "a player casts" is a spell-cast trigger, whose watched
     // object is the SPELL rather than the subject that cast it.
+    // "Whenever YOU GAIN LIFE" watches an event about the controller, not an
+    // object, so it has no watched-object slot.
+    if let Ok((r2, _)) = phrase("you gain life")(r) {
+        return Ok((r2, TriggerHead::mode(TriggerMode::LifeGained)));
+    }
+
     if let Ok((r2, _)) = phrase("you cast")(r) {
         let (r3, f) = cast_filter(r2)?;
         let mut h = TriggerHead::mode(TriggerMode::SpellCast);
@@ -219,6 +248,15 @@ fn event_head(i: In<'_>) -> R<'_, TriggerHead> {
         h.origin = Some(ZoneName::Battlefield);
         h.destination = Some(ZoneName::Graveyard);
         return Ok((r2, h));
+    }
+
+    if let Ok((r2, _)) = phrase("becomes the target of")(r) {
+        // The spell or ability doing the targeting is not recorded here; the
+        // trigger watches the OBJECT that became a target.
+        let (r3, _) = subject(r2)?;
+        let mut h = TriggerHead::mode(TriggerMode::BecomesTarget);
+        h.valid_card = Some(who);
+        return Ok((r3, h));
     }
 
     const SIMPLE: &[(&str, TriggerMode)] = &[

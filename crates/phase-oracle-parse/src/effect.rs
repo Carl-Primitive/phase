@@ -349,6 +349,77 @@ pub fn imperative(i: In<'_>) -> R<'_, (Effect, ClauseFacts)> {
         return return_clause(i, r);
     }
 
+    // "Search your library for a basic land card" — CR 701.19a.
+    if let Ok((r, _)) = phrase("search your library for")(i) {
+        let (r, s) = subject(r)?;
+        // "reveal it" is printed as its own following clause on some cards and
+        // as part of this one on others; only the inline form is read here.
+        let (r, reveal) = match phrase_alt(&[("and reveal it", ()), ("revealing it", ())])(r) {
+            Ok((r2, _)) => (r2, true),
+            Err(_) => (r, false),
+        };
+        return Ok((
+            r,
+            (
+                Effect::SearchLibrary {
+                    filter: s.filter,
+                    count: Quantity::fixed(1),
+                    reveal,
+                    target_player: None,
+                },
+                ClauseFacts::default(),
+            ),
+        ));
+    }
+
+    // CR 701.20a: "gain control of target creature".
+    if let Ok((r, _)) = phrase("gain control of")(i) {
+        let (r, s) = subject(r)?;
+        let f = ClauseFacts::of(&s);
+        return Ok((r, (Effect::GainControl { target: s.filter }, f)));
+    }
+
+    // CR 122.2: "remove a +1/+1 counter from ~".
+    if let Ok((r, _)) = word("remove")(i) {
+        let (r, q) = quantity(r).unwrap_or((r, Quantity::fixed(1)));
+        let (r, c) = crate::prim::counter_type(r)?;
+        let (r, _) = counters_noun(r)?;
+        let (r, _) = word("from")(r)?;
+        let (r, s) = subject(r)?;
+        let f = ClauseFacts::of(&s);
+        return Ok((
+            r,
+            (
+                Effect::RemoveCounter {
+                    counter_type: c,
+                    count: q,
+                    target: s.filter,
+                },
+                f,
+            ),
+        ));
+    }
+
+    // CR 701.28a.
+    if let Ok((r, _)) = word("transform")(i) {
+        let (r, s) = subject(r)?;
+        let f = ClauseFacts::of(&s);
+        let scope = match s.scope {
+            Scope::Single => TapScope::Single,
+            Scope::All => TapScope::All,
+        };
+        return Ok((
+            r,
+            (
+                Effect::Transform {
+                    target: s.filter,
+                    scope,
+                },
+                f,
+            ),
+        ));
+    }
+
     if let Ok((r, produced)) = add_mana(i) {
         return Ok((r, (Effect::Mana { produced }, ClauseFacts::default())));
     }

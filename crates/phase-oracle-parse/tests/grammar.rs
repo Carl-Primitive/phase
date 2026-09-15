@@ -1716,3 +1716,93 @@ fn a_negated_controller_clause_is_matched_before_the_positive_one() {
     );
     assert_eq!(yours[0]["effect"]["target"]["controller"], "You");
 }
+
+// ---------------------------------------------------------------------------
+// More effect verbs, more trigger events
+// ---------------------------------------------------------------------------
+
+#[test]
+fn search_gain_control_remove_counter_and_transform() {
+    let search = abilities("Whatever", "Search your library for a basic land card.");
+    assert_eq!(
+        search[0]["effect"],
+        json!({
+            "type": "SearchLibrary",
+            "filter": {
+                "type": "Typed",
+                "type_filters": ["Land"],
+                "controller": null,
+                "properties": [{"type": "HasSupertype", "value": "Basic"}]
+            },
+            "count": {"type": "Fixed", "value": 1},
+            "reveal": false
+        })
+    );
+
+    let control = abilities(
+        "Whatever",
+        "Gain control of target creature an opponent controls.",
+    );
+    assert_eq!(control[0]["effect"]["type"], "GainControl");
+    assert_eq!(control[0]["effect"]["target"]["controller"], "Opponent");
+
+    let remove = abilities("Whatever", "Remove a time counter from ~.");
+    assert_eq!(
+        remove[0]["effect"],
+        json!({
+            "type": "RemoveCounter",
+            "counter_type": "time",
+            "count": {"type": "Fixed", "value": 1},
+            "target": {"type": "SelfRef"}
+        })
+    );
+
+    let transform = abilities("Whatever", "Transform ~.");
+    assert_eq!(transform[0]["effect"]["type"], "Transform");
+    assert_eq!(transform[0]["effect"]["scope"], json!({"type": "Single"}));
+}
+
+#[test]
+fn a_trigger_can_watch_either_of_two_objects() {
+    // CR 603.2: "~ or another creature dies" is ONE trigger watching a
+    // disjunction, not two triggers.
+    let v = triggers(
+        "Blood Artist",
+        "Whenever ~ or another creature dies, you gain 1 life.",
+    );
+    assert_eq!(
+        v[0]["valid_card"],
+        json!({
+            "type": "Or",
+            "filters": [
+                {"type": "SelfRef"},
+                {
+                    "type": "Typed",
+                    "type_filters": ["Creature"],
+                    "controller": null,
+                    "properties": [{"type": "Another"}]
+                }
+            ]
+        })
+    );
+}
+
+#[test]
+fn an_event_about_the_controller_has_no_watched_object() {
+    let v = triggers(
+        "Whatever",
+        "Whenever you gain life, put a +1/+1 counter on ~.",
+    );
+    assert_eq!(v[0]["mode"], "LifeGained");
+    assert_eq!(v[0]["valid_card"], json!(null));
+}
+
+#[test]
+fn a_step_with_no_possessive_fires_on_every_turn() {
+    let each = triggers(
+        "Whatever",
+        "At the beginning of each end step, draw a card.",
+    );
+    assert_eq!(each[0]["phase"], "End");
+    assert_eq!(each[0]["constraint"], json!(null));
+}

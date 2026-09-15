@@ -246,6 +246,30 @@ pub enum Effect {
     /// CR 701.3a: attach this permanent to another. The Equip and Fortify
     /// keyword abilities lower to this.
     Attach { target: TargetFilter },
+    /// CR 701.19a: search a library for cards matching a filter.
+    ///
+    /// `target_player` is absent for the common "search YOUR library" form; the
+    /// engine only prints it when someone else's library is searched.
+    SearchLibrary {
+        filter: TargetFilter,
+        count: Quantity,
+        reveal: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target_player: Option<TargetFilter>,
+    },
+    /// CR 701.20a.
+    GainControl { target: TargetFilter },
+    /// CR 122.2.
+    RemoveCounter {
+        counter_type: CounterType,
+        count: Quantity,
+        target: TargetFilter,
+    },
+    /// CR 701.28a.
+    Transform {
+        target: TargetFilter,
+        scope: TapScope,
+    },
     /// CR 605: a mana ability's production.
     Mana { produced: ManaProduced },
     /// CR 111: token creation.
