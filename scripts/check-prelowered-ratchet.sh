@@ -25,9 +25,13 @@
 #
 # Deliberately avoids `declare -A` (bash 4+): macOS ships bash 3.2 as
 # `/bin/bash` (and often as the first `bash` on PATH), where associative
-# arrays aren't available and this script would silently no-op every check.
-# Parallel indexed arrays + linear lookup replace the two maps; ledgers here
-# are small (dozens of entries at most), so the O(n) lookup cost is immaterial.
+# arrays aren't available and the script aborts on its first `declare -A`
+# before checking anything -- which takes the whole pre-commit hook down with
+# it, not just this gate. Parallel indexed arrays + linear lookup replace the
+# two maps; ledgers here are small (dozens of entries at most), so the O(n)
+# lookup cost is immaterial.
+#
+# Regression suite: scripts/lib/prelowered_ratchet_tests.sh (Tilt `lint`).
 
 set -euo pipefail
 
@@ -45,17 +49,18 @@ if [[ ! -f "$LEDGER" ]]; then
 fi
 
 # --- ledger -> parallel arrays ----------------------------------------------
+# `ceiling_paths[i]` / `ceiling_limits[i]` are the two halves of one map and
+# `ceiling_index_of` is its lookup.
+#
+# Repeated paths are rejected rather than resolved. Under `declare -A` a second
+# row for the same path silently won (last-write-wins); a linear lookup just as
+# silently picks the FIRST, so a stale looser row could shadow a tightened one
+# and let a raised count through the gate. Both behaviours hide which row is in
+# force from anyone reading the ledger, which is the archaeology this gate
+# exists to abolish -- so an ambiguous ledger is rejected the same way a
+# malformed ceiling is, and the lookup's first-vs-last choice stops mattering.
 ceiling_paths=()
 ceiling_limits=()
-while read -r path limit _rest; do
-  [[ -z "${path:-}" || "$path" == \#* ]] && continue
-  if ! [[ "$limit" =~ ^[0-9]+$ ]]; then
-    echo "prelowered-ratchet: malformed ledger line for '$path' (ceiling '$limit')" >&2
-    exit 1
-  fi
-  ceiling_paths+=("$path")
-  ceiling_limits+=("$limit")
-done < "$LEDGER"
 
 ceiling_index_of() {
   local target="$1" i
@@ -64,6 +69,21 @@ ceiling_index_of() {
   done
   return 1
 }
+
+while read -r path limit _rest; do
+  [[ -z "${path:-}" || "$path" == \#* ]] && continue
+  if ! [[ "$limit" =~ ^[0-9]+$ ]]; then
+    echo "prelowered-ratchet: malformed ledger line for '$path' (ceiling '$limit')" >&2
+    exit 1
+  fi
+  if ceiling_index_of "$path" >/dev/null; then
+    echo "prelowered-ratchet: duplicate ledger entry for '$path' in $LEDGER" >&2
+    echo "    Two rows for one path make the enforced ceiling ambiguous; keep exactly one." >&2
+    exit 1
+  fi
+  ceiling_paths+=("$path")
+  ceiling_limits+=("$limit")
+done < "$LEDGER"
 
 # --- measured counts ---------------------------------------------------------
 actual_paths=()
