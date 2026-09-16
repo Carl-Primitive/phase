@@ -55,6 +55,9 @@ pub fn equip_line(i: In<'_>, description: &str) -> Option<AbilityDefinition> {
     let mut a = AbilityDefinition::new(
         AbilityKind::Activated,
         Effect::Attach {
+            // The Equip ability attaches the SOURCE, which the engine leaves
+            // implicit rather than naming.
+            attachment: None,
             target: TargetFilter::Typed(TypedFilter {
                 type_filters: vec![phase_oracle_ast::TypeFilter::Creature],
                 controller: Some(ControllerRef::You),

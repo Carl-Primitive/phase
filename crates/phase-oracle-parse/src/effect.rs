@@ -464,6 +464,64 @@ pub fn imperative(i: In<'_>) -> R<'_, (Effect, ClauseFacts)> {
         ));
     }
 
+    // "you get {E}{E}" — CR 122.1. Energy is counted by repeating its symbol
+    // rather than by printing a number, so the symbols are what get counted.
+    if let Ok((r, _)) = phrase("you get")(i) {
+        if let Some((r2, amount)) = energy_symbols(r) {
+            return Ok((
+                r2,
+                (
+                    Effect::GainEnergy {
+                        amount: Quantity::fixed(amount),
+                    },
+                    ClauseFacts::default(),
+                ),
+            ));
+        }
+    }
+
+    // "attach it to target creature you control" — CR 701.3a.
+    if let Ok((r, _)) = phrase("attach")(i) {
+        let (r, attachment) = match phrase("it")(r) {
+            Ok((r2, _)) => (r2, Some(TargetFilter::ParentTarget)),
+            Err(_) => {
+                let (r2, s) = subject(r)?;
+                (r2, Some(s.filter))
+            }
+        };
+        let (r, _) = word("to")(r)?;
+        let (r, host) = subject(r)?;
+        let facts = ClauseFacts::of(&host);
+        return Ok((
+            r,
+            (
+                Effect::Attach {
+                    attachment,
+                    target: host.filter,
+                },
+                facts,
+            ),
+        ));
+    }
+
+    // Keyword actions with no argument: the printed verb IS the whole
+    // instruction. CR 701.
+    const WORDLESS: &[(&str, Effect)] = &[
+        ("investigate", Effect::Investigate),
+        ("proliferate", Effect::Proliferate),
+        ("you become the monarch", Effect::BecomeMonarch),
+        ("venture into the dungeon", Effect::VentureIntoDungeon),
+        ("populate", Effect::Populate),
+        ("clash with an opponent", Effect::Clash),
+        ("you take the initiative", Effect::TakeTheInitiative),
+        ("learn", Effect::Learn),
+        ("manifest dread", Effect::ManifestDread),
+        ("end the turn", Effect::EndTheTurn),
+    ];
+    if let Ok((r, e)) = phrase_alt(WORDLESS)(i) {
+        return Ok((r, (e, ClauseFacts::default())));
+    }
+
     if let Ok((r, produced)) = add_mana(i) {
         return Ok((r, (Effect::Mana { produced }, ClauseFacts::default())));
     }
@@ -577,6 +635,20 @@ fn add_mana(i: In<'_>) -> R<'_, ManaProduced> {
         // than guess which half wins.
         (false, _) => fail(i),
     }
+}
+
+/// A run of `{E}` symbols, yielding how many were printed.
+fn energy_symbols(i: In<'_>) -> Option<(In<'_>, i32)> {
+    let mut rest = i;
+    let mut n = 0;
+    while let Ok((r, body)) = crate::prim::symbol_body(rest) {
+        if !body.eq_ignore_ascii_case("E") {
+            break;
+        }
+        n += 1;
+        rest = r;
+    }
+    (n > 0).then_some((rest, n))
 }
 
 /// A single coloured mana symbol, for the "add {U} or {B}" choice.

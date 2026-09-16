@@ -58,6 +58,12 @@ pub enum StaticMode {
     },
     /// CR 701.5a: the spell cannot be countered.
     CantBeCountered,
+    /// CR 509.1b: the object may block ONLY creatures matching the filter —
+    /// the mirror of `CantBeBlockedBy`, restricting this object rather than
+    /// the ones facing it.
+    BlockRestriction {
+        filter: crate::filter::TargetFilter,
+    },
 }
 
 /// CR 613.1: a game-state predicate that gates a continuous effect.

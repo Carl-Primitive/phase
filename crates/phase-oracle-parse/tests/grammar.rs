@@ -2342,3 +2342,92 @@ fn this_spell_names_the_source_without_being_normalized() {
     assert_eq!(v[0]["affected"], json!({"type": "SelfRef"}));
     assert_eq!(v[0]["description"], "This spell can't be countered.");
 }
+
+// ---------------------------------------------------------------------------
+// Keyword actions, attachment, and the "would ... instead" template
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_keyword_action_with_no_argument_is_its_own_whole_instruction() {
+    // CR 701. The printed verb IS the effect and there is nothing else in the
+    // clause to read, so these share one production instead of an arm apiece.
+    for (text, kind) in [
+        ("Investigate.", "Investigate"),
+        ("Proliferate.", "Proliferate"),
+        ("Populate.", "Populate"),
+        ("You become the monarch.", "BecomeMonarch"),
+        ("Venture into the dungeon.", "VentureIntoDungeon"),
+    ] {
+        let v = abilities("Whatever", text);
+        assert_eq!(v[0]["effect"], json!({"type": kind}), "{text}");
+    }
+}
+
+#[test]
+fn energy_is_counted_by_repeating_its_symbol() {
+    // CR 122.1: no number is printed, so the symbols are what get counted — and
+    // a player GETS energy, so the effect names no object.
+    let v = triggers("Whatever", "When ~ enters, you get {E}{E}.");
+    assert_eq!(
+        v[0]["execute"]["effect"],
+        json!({"type": "GainEnergy", "amount": {"type": "Fixed", "value": 2}})
+    );
+}
+
+#[test]
+fn attach_names_what_is_attached_only_when_the_text_does() {
+    // Equip attaches the SOURCE, which the engine leaves implicit; a trigger
+    // attaching the object it resolved for names it.
+    let equip = abilities("Bonesplitter", "Equip {1}");
+    assert!(equip[0]["effect"].get("attachment").is_none());
+
+    let trigger = triggers(
+        "Whatever",
+        "When this Equipment enters, attach it to target creature you control.",
+    );
+    assert_eq!(
+        trigger[0]["execute"]["effect"],
+        json!({
+            "type": "Attach",
+            "attachment": {"type": "ParentTarget"},
+            "target": {
+                "type": "Typed",
+                "type_filters": ["Creature"],
+                "controller": "You",
+                "properties": []
+            }
+        })
+    );
+}
+
+#[test]
+fn the_would_instead_template_is_what_makes_a_replacement_recognizable() {
+    // CR 614.1a. `destination_zone` is the zone being REPLACED, not the one the
+    // object ends up in — the object goes to exile, the field says Graveyard.
+    let v = parsed(
+        "Brinebound Gift",
+        "If ~ would be put into a graveyard from anywhere, exile it instead.",
+    )["replacements"]
+        .clone();
+    assert_eq!(v[0]["event"], "Moved");
+    assert_eq!(v[0]["destination_zone"], "Graveyard");
+    assert_eq!(v[0]["execute"]["effect"]["destination"], "Exile");
+}
+
+#[test]
+fn a_block_restriction_and_a_blocked_by_restriction_are_different_modes() {
+    // One restricts THIS object, the other the objects facing it.
+    let only = parsed(
+        "Whatever",
+        "This creature can block only creatures with flying.",
+    )["static_abilities"]
+        .clone();
+    assert!(only[0]["mode"].get("BlockRestriction").is_some());
+
+    let by = parsed(
+        "Whatever",
+        "This creature can't be blocked by creatures with power 2 or less.",
+    )["static_abilities"]
+        .clone();
+    assert!(by[0]["mode"].get("CantBeBlockedBy").is_some());
+}

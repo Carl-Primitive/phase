@@ -353,6 +353,9 @@ fn parse_line(l: &Line<'_>, src: &str) -> Result<Lowered, Decline> {
     if let Some(r) = enters_replacement(l, src) {
         return Ok(Lowered::Replacement(Box::new(r)));
     }
+    if let Some(r) = would_be_put_instead(l, src) {
+        return Ok(Lowered::Replacement(Box::new(r)));
+    }
 
     if trigger::looks_like_trigger(stream) {
         return triggered_line(l, src);
@@ -451,6 +454,21 @@ fn mode_only_static(l: &Line<'_>, src: &str) -> Option<phase_oracle_ast::StaticA
         return Some(sa);
     }
 
+    // "can block only <filter>" restricts THIS object rather than the ones
+    // facing it, which is a different mode from "can't be blocked by".
+    if let Ok((r, _)) = prim::phrase("can block only")(rest) {
+        let (r, blockable) = target::subject(r).ok()?;
+        if !line::is_exhausted(r) {
+            return None;
+        }
+        let mut sa = StaticAbility::continuous(s.filter, Vec::new());
+        sa.mode = StaticMode::BlockRestriction {
+            filter: blockable.filter,
+        };
+        sa.description = Some(l.description.clone());
+        return Some(sa);
+    }
+
     let (rest, mode) = prim::phrase_alt(MODES)(rest).ok()?;
     if !line::is_exhausted(rest) {
         return None;
@@ -526,6 +544,51 @@ fn enters_replacement(l: &Line<'_>, src: &str) -> Option<phase_oracle_ast::Repla
         description: Some(l.description.clone()),
         condition: None,
         destination_zone: Some(ZoneName::Battlefield),
+    })
+}
+
+/// `If ~ would be put into a graveyard from anywhere, exile it instead.`
+///
+/// CR 614.1a: a replacement stated in the "would ... instead" template, which
+/// is the printed form that makes a replacement recognizable without knowing
+/// what event it modifies. `destination_zone` is the zone being REPLACED, not
+/// the one the object ends up in.
+fn would_be_put_instead(l: &Line<'_>, src: &str) -> Option<phase_oracle_ast::Replacement> {
+    use phase_oracle_ast::{
+        AbilityDefinition, Effect, Replacement, ReplacementEvent, ReplacementMode, ZoneName,
+    };
+
+    let stream = Tokens::new(l.toks, src);
+    let (rest, _) = prim::word("if")(stream).ok()?;
+    let (rest, s) = target::subject(rest).ok()?;
+    let (rest, _) = prim::phrase("would be put into a graveyard from anywhere")(rest).ok()?;
+    // The comma between the condition and its replacement is structural, and
+    // `phrase` matches words only.
+    let rest = match rest.first() {
+        Some(t) if t.kind == TokenKind::Comma => rest.take_from_n(1),
+        _ => rest,
+    };
+    let (rest, _) = prim::phrase("exile it instead")(rest).ok()?;
+    if !line::is_exhausted(rest) {
+        return None;
+    }
+
+    Some(Replacement {
+        event: ReplacementEvent::Moved,
+        execute: AbilityDefinition::spell(Effect::ChangeZone {
+            origin: None,
+            destination: ZoneName::Exile,
+            target: s.filter.clone(),
+            owner_library: false,
+            enter_transformed: false,
+            enter_tapped: false,
+            enters_attacking: false,
+        }),
+        mode: ReplacementMode::Mandatory,
+        valid_card: Some(s.filter),
+        description: Some(l.description.clone()),
+        condition: None,
+        destination_zone: Some(ZoneName::Graveyard),
     })
 }
 

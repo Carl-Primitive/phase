@@ -196,7 +196,9 @@ pub enum Effect {
         target: TargetFilter,
     },
     /// CR 701.22a.
-    Shuffle { target: TargetFilter },
+    Shuffle {
+        target: TargetFilter,
+    },
     /// "Return to its owner's hand". `destination` is `None` for the plain
     /// hand-bounce; the engine reserves the field for the library variants.
     Bounce {
@@ -209,7 +211,9 @@ pub enum Effect {
     },
     /// The mass form carries NO destination field. That asymmetry with
     /// `Bounce` is the engine's printed shape, verified against the corpus.
-    BounceAll { target: TargetFilter },
+    BounceAll {
+        target: TargetFilter,
+    },
     /// CR 701.5a. Exile is spelled as a zone change, not as its own variant.
     ChangeZone {
         origin: Option<ZoneName>,
@@ -229,7 +233,9 @@ pub enum Effect {
         target: TargetFilter,
     },
     /// CR 701.5a: counter a spell or ability.
-    Counter { target: TargetFilter },
+    Counter {
+        target: TargetFilter,
+    },
     /// A spell or ability that creates a continuous effect. CR 611.
     ///
     /// This is how the engine spells "target creature gains flying until end
@@ -242,10 +248,23 @@ pub enum Effect {
         target: Option<TargetFilter>,
     },
     /// CR 701.15a.
-    Regenerate { target: TargetFilter },
-    /// CR 701.3a: attach this permanent to another. The Equip and Fortify
-    /// keyword abilities lower to this.
-    Attach { target: TargetFilter },
+    Regenerate {
+        target: TargetFilter,
+    },
+    /// CR 701.3a: attach a permanent to another.
+    ///
+    /// `attachment` names WHAT is attached and is absent for the Equip ability,
+    /// where the source attaches itself. A trigger that attaches the object it
+    /// just resolved for names it explicitly.
+    Attach {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        attachment: Option<TargetFilter>,
+        target: TargetFilter,
+    },
+    /// CR 122.1: energy counters, which a PLAYER gets rather than an object.
+    GainEnergy {
+        amount: Quantity,
+    },
     /// CR 701.19a: search a library for cards matching a filter.
     ///
     /// `target_player` is absent for the common "search YOUR library" form; the
@@ -258,7 +277,9 @@ pub enum Effect {
         target_player: Option<TargetFilter>,
     },
     /// CR 701.20a.
-    GainControl { target: TargetFilter },
+    GainControl {
+        target: TargetFilter,
+    },
     /// CR 122.2.
     RemoveCounter {
         counter_type: CounterType,
@@ -270,8 +291,26 @@ pub enum Effect {
         target: TargetFilter,
         scope: TapScope,
     },
+    /// Keyword ACTIONS that take no argument. CR 701.
+    ///
+    /// Each is a whole instruction spelled as one or two words, so they share a
+    /// production rather than getting an arm apiece: the printed verb IS the
+    /// effect, and there is nothing else in the clause to read.
+    Investigate,
+    Proliferate,
+    BecomeMonarch,
+    VentureIntoDungeon,
+    Explore,
+    Populate,
+    Clash,
+    TakeTheInitiative,
+    Learn,
+    ManifestDread,
+    EndTheTurn,
     /// CR 605: a mana ability's production.
-    Mana { produced: ManaProduced },
+    Mana {
+        produced: ManaProduced,
+    },
     /// CR 111: token creation.
     Token {
         name: String,
