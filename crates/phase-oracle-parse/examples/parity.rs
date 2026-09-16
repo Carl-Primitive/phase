@@ -33,6 +33,40 @@ fn normalize(v: &Value) -> Value {
     }
 }
 
+/// Does some printed line consist of nothing but reminder text?
+fn reminder_only_line(text: &str) -> bool {
+    text.lines().any(|l| {
+        let t = l.trim();
+        t.starts_with('(') && t.ends_with(')')
+    })
+}
+
+/// A cheap deterministic spread, so samples come from across the corpus rather
+/// than from the first cards alphabetically.
+fn fastrand_ish(name: &str) -> bool {
+    name.bytes().map(usize::from).sum::<usize>() % 37 == 0
+}
+
+/// Every `type` tag appearing on an effect anywhere inside a bucket.
+fn collect_effect_kinds(v: Option<&Value>, out: &mut std::collections::BTreeSet<String>) {
+    match v {
+        Some(Value::Object(o)) => {
+            if let Some(Value::String(t)) = o.get("type") {
+                out.insert(t.clone());
+            }
+            for inner in o.values() {
+                collect_effect_kinds(Some(inner), out);
+            }
+        }
+        Some(Value::Array(a)) => {
+            for inner in a {
+                collect_effect_kinds(Some(inner), out);
+            }
+        }
+        _ => {}
+    }
+}
+
 fn arr(card: &Value, key: &str) -> Value {
     normalize(card.get(key).unwrap_or(&Value::Null))
 }
@@ -62,6 +96,11 @@ fn main() {
     // Every Nth decline per production, so the sample spans the corpus instead
     // of being the first twenty cards alphabetically.
     let mut decline_samples: BTreeMap<&'static str, Vec<String>> = BTreeMap::new();
+    let mut blocked_by: BTreeMap<String, usize> = BTreeMap::new();
+    let mut near_miss: BTreeMap<String, usize> = BTreeMap::new();
+    let mut near_samples: Vec<String> = Vec::new();
+    let mut one_line_short = 0usize;
+    let blocking = std::env::var("PARITY_BLOCKING").ok();
     let mut by_head: BTreeMap<String, usize> = BTreeMap::new();
     let mut mismatch_bucket: BTreeMap<&'static str, usize> = BTreeMap::new();
     let mut examples: Vec<String> = Vec::new();
@@ -109,6 +148,38 @@ fn main() {
         }
 
         if !p.is_complete() {
+            // What is BLOCKING this card? The engine's own effect vocabulary
+            // for a card the grammar could not finish is the most direct work
+            // list there is: it names what to build, ranked by how many cards
+            // each unlock would reach.
+            // Cards blocked by exactly ONE line are the near misses: each is a
+            // single production away from being comparable at all.
+            if p.declines.len() == 1 {
+                one_line_short += 1;
+                let d = &p.declines[0];
+                let head = d
+                    .text
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or("")
+                    .trim_matches(|c: char| !c.is_alphanumeric() && c != '{' && c != '~')
+                    .to_lowercase();
+                *near_miss
+                    .entry(format!("{:<16} {head}", d.production))
+                    .or_default() += 1;
+                if near_samples.len() < 40 && fastrand_ish(name) {
+                    near_samples.push(d.text.chars().take(96).collect::<String>());
+                }
+            }
+            if blocking.is_some() {
+                let mut kinds = std::collections::BTreeSet::new();
+                for bucket in ["abilities", "triggers", "static_abilities"] {
+                    collect_effect_kinds(card.get(bucket), &mut kinds);
+                }
+                for k in kinds {
+                    *blocked_by.entry(k).or_default() += 1;
+                }
+            }
             continue;
         }
         complete += 1;
@@ -116,7 +187,7 @@ fn main() {
         // A bucket the grammar never emits must also be empty on their side,
         // otherwise "complete" would be claiming a card whose replacements we
         // silently dropped.
-        let untouched_buckets = ["replacements", "additional_cost"];
+        let untouched_buckets = ["additional_cost"];
         let their_extra = untouched_buckets.iter().find(|k| card.get(**k).is_some());
 
         // Keyword ORDER is compared as a multiset, not a sequence.
@@ -152,12 +223,17 @@ fn main() {
         } else {
             mine(&p.out.static_abilities) == arr(card, "static_abilities")
         };
+        let rep_ok = if p.out.replacements.is_empty() {
+            card.get("replacements").is_none()
+        } else {
+            mine(&p.out.replacements) == arr(card, "replacements")
+        };
         let modal_ok = match &p.out.modal {
             None => card.get("modal").is_none(),
             Some(m) => mine(m) == arr(card, "modal"),
         };
 
-        if kw_ok && ab_ok && tr_ok && st_ok && modal_ok && their_extra.is_none() {
+        if kw_ok && ab_ok && tr_ok && st_ok && modal_ok && rep_ok && their_extra.is_none() {
             exact += 1;
             continue;
         }
@@ -184,15 +260,15 @@ fn main() {
         let bucket = if theirs_unimplemented {
             improvements += 1;
             "engine declined, we parsed"
-        } else if p.out.is_empty() {
-            // The card's whole Oracle text was reminder text, so the engine's
-            // abilities came from its TYPE LINE (a dual land's mana abilities)
-            // rather than from any sentence. Not a grammar gap: the input this
-            // parser is given does not contain the information.
-            "no oracle-derived content"
+        } else if reminder_only_line(text) && !ab_ok {
+            // A line that is ENTIRELY reminder text carries no rules content,
+            // yet the engine has abilities for it — they come from the card's
+            // TYPE LINE (a dual land's mana abilities), which this parser is
+            // never given. Not a grammar gap: the information is not in the
+            // input. Named separately so it cannot be mistaken for one.
+            "type-line ability, not in the text"
         } else if let Some(b) = their_extra {
             match *b {
-                "replacements" => "dropped: replacements",
                 _ => "dropped: additional_cost",
             }
         } else if !kw_ok {
@@ -203,6 +279,8 @@ fn main() {
             "static abilities differ"
         } else if !modal_ok {
             "modal differs"
+        } else if !rep_ok {
+            "replacements differ"
         } else {
             "abilities differ"
         };
@@ -228,6 +306,11 @@ fn main() {
                     arr(card, "static_abilities"),
                 ),
                 "modal differs" => ("modal", mine(&p.out.modal), arr(card, "modal")),
+                "replacements differ" => (
+                    "replacements",
+                    mine(&p.out.replacements),
+                    arr(card, "replacements"),
+                ),
                 _ => ("abilities", mine(&p.out.abilities), arr(card, "abilities")),
             };
             examples.push(format!(
@@ -255,6 +338,29 @@ fn main() {
         "whole-corpus exact-match rate         {:.1}%",
         100.0 * exact as f64 / total as f64
     );
+
+    if blocking.is_some() {
+        println!("\nengine effect kinds on cards the grammar could NOT finish:");
+        let mut v: Vec<_> = blocked_by.iter().collect();
+        v.sort_by_key(|(_, n)| std::cmp::Reverse(**n));
+        for (k, n) in v.into_iter().take(40) {
+            println!("  {n:>7}  {k}");
+        }
+    }
+
+    println!("\ncards one line short of parsing      {one_line_short}");
+    if blocking.is_some() {
+        println!("\nnear misses by production and head:");
+        let mut v: Vec<_> = near_miss.iter().collect();
+        v.sort_by_key(|(_, n)| std::cmp::Reverse(**n));
+        for (k, n) in v.into_iter().take(28) {
+            println!("  {n:>6}  {k}");
+        }
+        println!("\nnear-miss samples:");
+        for s in near_samples.iter().take(24) {
+            println!("   {s}");
+        }
+    }
 
     println!("\ndeclines by production:");
     let mut v: Vec<_> = by_production.iter().collect();

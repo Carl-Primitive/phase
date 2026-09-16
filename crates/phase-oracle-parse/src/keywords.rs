@@ -109,13 +109,19 @@ const COSTED_KEYWORDS: &[(&str, bool)] = &[
     ("ward", true),
 ];
 
-/// `<Keyword> <mana cost>` — a keyword line that carries a cost.
+/// `<Keyword> <mana cost>` occupying a WHOLE line.
 pub fn costed_keyword_line(i: In<'_>) -> Option<Keyword> {
+    let (rest, kw) = costed_keyword(i)?;
+    crate::line::is_exhausted(rest).then_some(kw)
+}
+
+/// `<Keyword> <mana cost>` as one element of a keyword list.
+pub fn costed_keyword(i: In<'_>) -> Option<(In<'_>, Keyword)> {
     let name = i.first_word()?;
     let (_, wrapped) = COSTED_KEYWORDS.iter().find(|(k, _)| *k == name)?;
     let rest = i.take_from_n(1);
 
-    let cost = mana_cost_only(rest)?;
+    let (rest, cost) = mana_cost_prefix(rest)?;
     let payload = if *wrapped {
         KeywordCost::Wrapped(WrappedKeywordCost::Mana(cost))
     } else {
@@ -131,15 +137,31 @@ pub fn costed_keyword_line(i: In<'_>) -> Option<Keyword> {
 
     let mut map = std::collections::BTreeMap::new();
     map.insert(printed, payload);
-    Some(Keyword::Costed(map))
+    Some((rest, Keyword::Costed(map)))
+}
+
+/// A leading run of mana symbols, leaving whatever follows.
+fn mana_cost_prefix(i: In<'_>) -> Option<(In<'_>, ManaCost)> {
+    let (rest, sym) = crate::prim::mana_symbol(i).ok()?;
+    let mut shards = Vec::new();
+    let mut generic = 0u32;
+    let mut push = |s: crate::prim::ManaSym| match s {
+        crate::prim::ManaSym::Shard(sh) => shards.push(sh),
+        crate::prim::ManaSym::Generic(n) => generic += n,
+    };
+    push(sym);
+    let mut rest = rest;
+    while let Ok((r, s)) = crate::prim::mana_symbol(rest) {
+        push(s);
+        rest = r;
+    }
+    Some((rest, ManaCost::Cost { shards, generic }))
 }
 
 /// A run of mana symbols that consumes the whole remaining line.
 fn mana_cost_only(i: In<'_>) -> Option<ManaCost> {
-    let AbilityCost::Mana { cost } = crate::cost::ability_cost(i)? else {
-        return None;
-    };
-    Some(cost)
+    let (rest, cost) = mana_cost_prefix(i)?;
+    crate::line::is_exhausted(rest).then_some(cost)
 }
 
 /// `Cycling <cost>` — CR 702.29a.

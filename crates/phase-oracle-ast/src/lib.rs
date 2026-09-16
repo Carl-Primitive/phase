@@ -20,6 +20,7 @@ pub mod cost;
 pub mod effect;
 pub mod filter;
 pub mod qty;
+pub mod replacement;
 pub mod static_ability;
 pub mod trigger;
 
@@ -38,6 +39,7 @@ pub use filter::{
     TargetFilter, TypeFilter, TypedFilter, Zone,
 };
 pub use qty::{Quantity, QuantityRef, StatScope};
+pub use replacement::{Replacement, ReplacementEvent, ReplacementMode};
 pub use static_ability::{Condition, Modification, StaticAbility, StaticMode};
 pub use trigger::{DamageKindFilter, PhaseName, TriggerDefinition, TriggerMode};
 
@@ -126,6 +128,8 @@ pub struct CardOutput {
     pub triggers: Vec<TriggerDefinition>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub static_abilities: Vec<static_ability::StaticAbility>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub replacements: Vec<Replacement>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub modal: Option<ModalChoice>,
 }
@@ -136,6 +140,7 @@ impl CardOutput {
             && self.abilities.is_empty()
             && self.triggers.is_empty()
             && self.static_abilities.is_empty()
+            && self.replacements.is_empty()
             && self.modal.is_none()
     }
 }

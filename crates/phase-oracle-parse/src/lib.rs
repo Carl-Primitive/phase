@@ -126,6 +126,7 @@ pub fn parse_card(name: &str, oracle: &str) -> CardParse {
                 spell_run.push((chain, desc, may));
             }
             Ok(Lowered::Statics(mut sa)) => out.static_abilities.append(&mut sa),
+            Ok(Lowered::Replacement(r)) => out.replacements.push(*r),
             Ok(Lowered::Ability(a)) => out.abilities.push(*a),
             Ok(Lowered::Trigger(t)) => out.triggers.push(*t),
             Err(d) => declines.push(d),
@@ -195,6 +196,7 @@ enum Lowered {
     KeywordWithAbility(Vec<Keyword>, Box<AbilityDefinition>),
     /// A spell line, left unassembled so consecutive ones can fold together.
     SpellBody(Vec<line::Part>, String, bool),
+    Replacement(Box<phase_oracle_ast::Replacement>),
     /// A line that is the permanent's own continuous ability. CR 611.2: an
     /// effect with no printed end lasts as long as its source, so it is not
     /// something a spell does — it is something the permanent IS.
@@ -294,6 +296,14 @@ fn parse_line(l: &Line<'_>, src: &str) -> Result<Lowered, Decline> {
         return activated_line(l, src, colon).map(|a| Lowered::Ability(Box::new(a)));
     }
 
+    // CR 614.1: "~ enters tapped" changes the zone-change event as it happens
+    // rather than resolving, so it belongs in `replacements` and not among the
+    // abilities. It is matched before the spell grammar because "enters" would
+    // otherwise look like an ordinary subject-initial clause.
+    if let Some(r) = enters_tapped(l, src) {
+        return Ok(Lowered::Replacement(Box::new(r)));
+    }
+
     if trigger::looks_like_trigger(stream) {
         return triggered_line(l, src).map(|t| Lowered::Trigger(Box::new(t)));
     }
@@ -339,6 +349,42 @@ fn static_description(line: &str) -> String {
 /// real sentence after it. Two shapes are deliberately NOT stripped: a chapter
 /// head ("I —", "II, III —"), whose numeral is structural, and a modal header
 /// ("Choose one —"), which has nothing after the dash on its own line.
+/// `~ enters tapped.` — CR 614.1c.
+///
+/// The commonest replacement in the corpus by a wide margin. The engine spells
+/// it as a `Moved` event into the battlefield whose execute taps the object,
+/// which is why it is a replacement rather than the `SetTapState` effect the
+/// same words would produce in an instruction.
+fn enters_tapped(l: &Line<'_>, src: &str) -> Option<phase_oracle_ast::Replacement> {
+    use phase_oracle_ast::{
+        AbilityDefinition, Effect, Replacement, ReplacementEvent, ReplacementMode, TapScope,
+        TapState, TargetFilter, ZoneName,
+    };
+
+    let stream = Tokens::new(l.toks, src);
+    let (rest, _) = prim::self_ref(stream).ok()?;
+    let (rest, _) = prim::phrase("enters tapped")(rest).ok()?;
+    if !line::is_exhausted(rest) {
+        return None;
+    }
+
+    let execute = AbilityDefinition::spell(Effect::SetTapState {
+        target: TargetFilter::SelfRef,
+        scope: TapScope::Single,
+        state: TapState::Tap,
+    });
+
+    Some(Replacement {
+        event: ReplacementEvent::Moved,
+        execute,
+        mode: ReplacementMode::Mandatory,
+        valid_card: Some(TargetFilter::SelfRef),
+        description: Some(l.description.clone()),
+        condition: None,
+        destination_zone: Some(ZoneName::Battlefield),
+    })
+}
+
 /// `Choose one —` and its relatives. CR 700.2.
 ///
 /// Returns the minimum and the maximum number of modes. The maximum for
@@ -474,7 +520,11 @@ fn keyword_line(i: Tokens<'_>) -> Option<Vec<Keyword>> {
     line::is_exhausted(rest).then_some(out)
 }
 
-/// One keyword in bare-line position, simple or parameterized.
+/// One keyword in bare-line position: simple, landwalk, or costed.
+///
+/// All three spellings appear in the SAME comma-separated list — "Flying, ward
+/// {2}" is one printed line — so they are alternatives of one production rather
+/// than three separate line shapes.
 fn bare_keyword(i: Tokens<'_>) -> Option<(Tokens<'_>, Keyword)> {
     // CR 702.14: landwalk is one keyword carrying a land type, so it is read
     // before the simple vocabulary rather than being five lookalike entries.
@@ -487,6 +537,9 @@ fn bare_keyword(i: Tokens<'_>) -> Option<(Tokens<'_>, Keyword)> {
                 },
             ));
         }
+    }
+    if let Some(v) = keywords::costed_keyword(i) {
+        return Some(v);
     }
     let (r, (pascal, _printed)) = effect::keyword_word(i).ok()?;
     Some((r, Keyword::Simple(pascal)))

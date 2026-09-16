@@ -2018,3 +2018,70 @@ fn a_folded_spell_ability_keeps_its_printed_position() {
     );
     assert_eq!(v["abilities"][1]["ability_tag"], json!({"type": "Cycling"}));
 }
+
+// ---------------------------------------------------------------------------
+// Replacement effects
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enters_tapped_is_a_replacement_not_an_instruction() {
+    // CR 614.1c. The same words produce a `SetTapState` EFFECT when they are an
+    // instruction ("Tap ~") and a replacement when they describe how the object
+    // arrives — because a replacement changes the event as it happens rather
+    // than resolving.
+    let v = parsed("Whatever", "This land enters tapped.");
+    assert_eq!(
+        v["replacements"],
+        json!([{
+            "event": "Moved",
+            "execute": {
+                "kind": "Spell",
+                "effect": {
+                    "type": "SetTapState",
+                    "target": {"type": "SelfRef"},
+                    "scope": {"type": "Single"},
+                    "state": {"type": "Tap"}
+                },
+                "cost": null,
+                "sub_ability": null,
+                "duration": null,
+                "description": null,
+                "target_prompt": null,
+                "condition": null,
+                "optional_targeting": false,
+                "optional": false,
+                "forward_result": false
+            },
+            "mode": {"type": "Mandatory"},
+            "valid_card": {"type": "SelfRef"},
+            "description": "~ enters tapped.",
+            "condition": null,
+            "destination_zone": "Battlefield"
+        }])
+    );
+    assert!(
+        v.get("abilities").is_none(),
+        "a replacement is not an ability"
+    );
+}
+
+#[test]
+fn a_mixed_keyword_line_takes_all_three_spellings() {
+    // "Flying, ward {2}" is ONE printed line carrying a simple keyword and a
+    // costed one, so they are alternatives of one production rather than three
+    // separate line shapes.
+    let v = parsed("Whatever", "Flying, ward {2}");
+    assert_eq!(
+        v["keywords"],
+        json!([
+            "Flying",
+            {"Ward": {"type": "Mana", "data": {"type": "Cost", "shards": [], "generic": 2}}}
+        ])
+    );
+
+    let with_landwalk = parsed("Whatever", "Flying, swampwalk");
+    assert_eq!(
+        with_landwalk["keywords"],
+        json!(["Flying", {"Landwalk": "Swamp"}])
+    );
+}
