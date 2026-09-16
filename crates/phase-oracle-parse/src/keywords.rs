@@ -141,3 +141,48 @@ fn mana_cost_only(i: In<'_>) -> Option<ManaCost> {
     };
     Some(cost)
 }
+
+/// `Cycling <cost>` — CR 702.29a.
+///
+/// A keyword that generates BEHAVIOUR as well as an entry, so it lowers to
+/// both: the `keywords` entry the engine keys by name, and the activated
+/// ability the keyword stands for — "discard this card, pay the cost: draw a
+/// card", activatable from the HAND rather than the battlefield.
+///
+/// None of that is printed outside the reminder text the grammar drops, which
+/// is exactly why it is derived from the keyword rather than parsed.
+pub fn cycling_line(i: In<'_>) -> Option<(Keyword, AbilityDefinition)> {
+    let (r, _) = word("cycling")(i).ok()?;
+    let cost = mana_cost_only(r)?;
+
+    let mut map = std::collections::BTreeMap::new();
+    map.insert(
+        "Cycling".to_string(),
+        KeywordCost::Wrapped(WrappedKeywordCost::Mana(cost.clone())),
+    );
+
+    let mut a = AbilityDefinition::new(
+        AbilityKind::Activated,
+        Effect::Draw {
+            count: phase_oracle_ast::Quantity::fixed(1),
+            target: TargetFilter::Controller,
+        },
+    );
+    a.cost = Some(AbilityCost::Composite {
+        costs: vec![
+            AbilityCost::Mana { cost },
+            AbilityCost::Discard {
+                count: phase_oracle_ast::Quantity::fixed(1),
+                filter: None,
+                selection_random: false,
+                // CR 702.29a: the card discarded is THIS one.
+                self_scope: true,
+            },
+        ],
+    });
+    // CR 602.1: a cycling ability is activated from the hand, so the zone has
+    // to be stated — absence would mean the battlefield.
+    a.activation_zone = Some(phase_oracle_ast::Zone::Hand);
+    a.ability_tag = Some(AbilityTag::Cycling);
+    Some((Keyword::Costed(map), a))
+}

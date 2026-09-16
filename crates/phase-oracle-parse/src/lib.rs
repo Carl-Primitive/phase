@@ -69,6 +69,11 @@ pub fn parse_card(name: &str, oracle: &str) -> CardParse {
     // definition whose description carries the newlines (CR 608.2c, written
     // order). Keyword, activated and triggered lines each stand alone.
     let mut spell_run: Vec<(Vec<line::Part>, String, bool)> = Vec::new();
+    // Where the folded spell ability belongs in the abilities array. The spell
+    // lines of a card fold into ONE definition that can only be built after all
+    // of them have been read, but it must still land in PRINTED order relative
+    // to the abilities that keywords generate.
+    let mut spell_run_at: Option<usize> = None;
 
     // CR 700.2: a modal header governs the bullet lines that FOLLOW it, so the
     // header's counts are held until the modes have been collected.
@@ -112,7 +117,14 @@ pub fn parse_card(name: &str, oracle: &str) -> CardParse {
 
         match parse_line(&l, &src) {
             Ok(Lowered::Keywords(mut kws)) => out.keywords.append(&mut kws),
-            Ok(Lowered::SpellBody(chain, desc, may)) => spell_run.push((chain, desc, may)),
+            Ok(Lowered::KeywordWithAbility(mut kws, a)) => {
+                out.keywords.append(&mut kws);
+                out.abilities.push(*a);
+            }
+            Ok(Lowered::SpellBody(chain, desc, may)) => {
+                spell_run_at.get_or_insert(out.abilities.len());
+                spell_run.push((chain, desc, may));
+            }
             Ok(Lowered::Statics(mut sa)) => out.static_abilities.append(&mut sa),
             Ok(Lowered::Ability(a)) => out.abilities.push(*a),
             Ok(Lowered::Trigger(t)) => out.triggers.push(*t),
@@ -121,7 +133,8 @@ pub fn parse_card(name: &str, oracle: &str) -> CardParse {
     }
 
     if let Some(a) = fold_spell_run(spell_run) {
-        out.abilities.push(a);
+        let at = spell_run_at.unwrap_or(out.abilities.len());
+        out.abilities.insert(at.min(out.abilities.len()), a);
     }
 
     if let Some((min_choices, max_raw)) = modal {
@@ -177,6 +190,9 @@ fn fold_spell_run(run: Vec<(Vec<line::Part>, String, bool)>) -> Option<AbilityDe
 
 enum Lowered {
     Keywords(Vec<Keyword>),
+    /// A keyword that generates behaviour as well as an entry: the entry goes
+    /// in `keywords`, the ability the keyword stands for goes in `abilities`.
+    KeywordWithAbility(Vec<Keyword>, Box<AbilityDefinition>),
     /// A spell line, left unassembled so consecutive ones can fold together.
     SpellBody(Vec<line::Part>, String, bool),
     /// A line that is the permanent's own continuous ability. CR 611.2: an
@@ -266,6 +282,9 @@ fn parse_line(l: &Line<'_>, src: &str) -> Result<Lowered, Decline> {
     }
     if let Some(kw) = keywords::costed_keyword_line(stream) {
         return Ok(Lowered::Keywords(vec![kw]));
+    }
+    if let Some((kw, a)) = keywords::cycling_line(stream) {
+        return Ok(Lowered::KeywordWithAbility(vec![kw], Box::new(a)));
     }
     if let Some(a) = keywords::equip_line(stream, &l.description) {
         return Ok(Lowered::Ability(Box::new(a)));

@@ -74,6 +74,7 @@ pub enum AbilityTag {
     Boast,
     Exhaust,
     PowerUp,
+    Cycling,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -110,6 +111,10 @@ pub struct AbilityDefinition {
     pub activation_restrictions: Vec<ActivationRestriction>,
     /// CR 702.6b: which keyword this ability came from, for effects that refer
     /// to abilities by keyword class.
+    /// CR 602.1: the zone this ability may be activated from. Absent means the
+    /// battlefield, which is why Cycling has to say `Hand` explicitly.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub activation_zone: Option<crate::filter::Zone>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ability_tag: Option<AbilityTag>,
     /// Always printed, even when null.
@@ -159,6 +164,7 @@ impl AbilityDefinition {
             description: None,
             target_prompt: None,
             activation_restrictions: Vec::new(),
+            activation_zone: None,
             ability_tag: None,
             condition: None,
             optional_targeting: false,

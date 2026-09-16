@@ -1886,10 +1886,14 @@ fn the_payload_family_is_a_fact_about_the_engine_not_about_the_card() {
 
 #[test]
 fn a_costed_keyword_that_also_generates_behaviour_is_not_hoisted() {
-    // Cycling draws a card; hoisting the keyword alone would drop that. Same
+    // Hoisting the keyword alone would drop the behaviour it stands for. Same
     // rule as for bare keywords, and it is why Flashback, Evoke and Bestow were
     // added to the list and then removed again.
-    for text in ["Cycling {2}", "Flashback {1}{B}", "Madness {1}{R}"] {
+    //
+    // Cycling is NOT in this list any more: its ability is now built, which is
+    // the only way out of a decline like these — build what the keyword means,
+    // then hoist it.
+    for text in ["Flashback {1}{B}", "Madness {1}{R}", "Echo {2}{U}"] {
         let p = parse_card("Whatever", text);
         assert!(
             !p.is_complete(),
@@ -1959,4 +1963,58 @@ fn for_each_turns_a_constant_into_an_object_count() {
 fn equal_to_the_number_of_replaces_the_count_rather_than_scaling_it() {
     let v = abilities("Whatever", "Draw a card for each creature you control.");
     assert_eq!(v[0]["effect"]["count"]["qty"]["type"], "ObjectCount");
+}
+
+// ---------------------------------------------------------------------------
+// A keyword that generates behaviour, and printed order
+// ---------------------------------------------------------------------------
+
+#[test]
+fn cycling_lowers_to_both_an_entry_and_the_ability_it_stands_for() {
+    // CR 702.29a. None of "discard this card, pay the cost: draw a card,
+    // activatable from your HAND" is printed outside the reminder text the
+    // grammar drops, so all of it is derived from the keyword.
+    let v = parsed("Whatever", "Cycling {2}");
+    assert_eq!(
+        v["keywords"],
+        json!([{"Cycling": {"type": "Mana", "data": {"type": "Cost", "shards": [], "generic": 2}}}])
+    );
+
+    let a = &v["abilities"][0];
+    assert_eq!(a["kind"], "Activated");
+    assert_eq!(a["effect"]["type"], "Draw");
+    assert_eq!(
+        a["cost"],
+        json!({
+            "type": "Composite",
+            "costs": [
+                {"type": "Mana", "cost": {"type": "Cost", "shards": [], "generic": 2}},
+                {
+                    "type": "Discard",
+                    "count": {"type": "Fixed", "value": 1},
+                    "filter": null,
+                    "random": false,
+                    "self_ref": true
+                }
+            ]
+        })
+    );
+    // CR 602.1: absence of this field would mean the battlefield.
+    assert_eq!(a["activation_zone"], "Hand");
+    assert_eq!(a["ability_tag"], json!({"type": "Cycling"}));
+}
+
+#[test]
+fn a_folded_spell_ability_keeps_its_printed_position() {
+    // A card's spell lines fold into ONE definition that can only be built once
+    // they have all been read — but it still has to land in printed order next
+    // to the abilities a keyword generates.
+    let v = parsed("Whatever", "Draw a card.\nCycling {2}");
+    assert_eq!(v["abilities"][0]["effect"]["type"], "Draw");
+    assert_eq!(
+        v["abilities"][0]["cost"],
+        json!(null),
+        "the spell line comes first"
+    );
+    assert_eq!(v["abilities"][1]["ability_tag"], json!({"type": "Cycling"}));
 }
