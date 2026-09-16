@@ -2130,3 +2130,75 @@ fn cant_be_blocked_is_a_mode_with_no_modifications() {
         }])
     );
 }
+
+// ---------------------------------------------------------------------------
+// Keywords that ARE an ability, and restrictions that are only a mode
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_characteristic_defining_keyword_lowers_to_the_static_it_defines() {
+    // CR 604.3. Changeling and Devoid print as a bare word but SET a
+    // characteristic, so hoisting the word alone would drop it. Building the
+    // static is the way back in — the same route Cycling took.
+    let changeling = parsed("Impostor of the Sixth Pride", "Changeling");
+    assert_eq!(changeling["keywords"], json!(["Changeling"]));
+    assert_eq!(
+        changeling["static_abilities"],
+        json!([{
+            "mode": "Continuous",
+            "affected": {"type": "SelfRef"},
+            "modifications": [{"type": "AddAllCreatureTypes"}],
+            "condition": null,
+            "affected_zone": null,
+            "effect_zone": null,
+            "active_zones": [],
+            "characteristic_defining": true,
+            "description": null
+        }])
+    );
+
+    // CR 702.114a: Devoid is an EMPTY colour list, not a missing one.
+    let devoid = parsed("Whatever", "Devoid");
+    assert_eq!(
+        devoid["static_abilities"][0]["modifications"],
+        json!([{"type": "SetColor", "colors": []}])
+    );
+    assert_eq!(
+        devoid["static_abilities"][0]["characteristic_defining"],
+        true
+    );
+}
+
+#[test]
+fn a_restriction_line_is_one_production_over_a_table_of_modes() {
+    // The subject grammar is shared and the modification list is empty in every
+    // case; only the mode varies.
+    for (text, mode) in [
+        ("This creature can't block.", "CantBlock"),
+        ("This creature can't be blocked.", "CantBeBlocked"),
+        ("This creature attacks each combat if able.", "MustAttack"),
+        (
+            "This creature doesn't untap during your untap step.",
+            "CantUntap",
+        ),
+    ] {
+        let v = parsed("Whatever", text)["static_abilities"].clone();
+        assert_eq!(v[0]["mode"], mode, "{text}");
+        assert_eq!(v[0]["affected"], json!({"type": "SelfRef"}), "{text}");
+        assert_eq!(v[0]["modifications"], json!([]), "{text}");
+    }
+}
+
+#[test]
+fn a_restriction_keeps_the_subject_the_line_printed() {
+    let v = parsed(
+        "Whatever",
+        "Enchanted creature doesn't untap during its controller's untap step.",
+    )["static_abilities"]
+        .clone();
+    assert_eq!(v[0]["mode"], "CantUntap");
+    assert_eq!(
+        v[0]["affected"]["properties"],
+        json!([{"type": "EnchantedBy"}])
+    );
+}

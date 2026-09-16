@@ -28,6 +28,14 @@ pub enum Modification {
     RemoveKeyword {
         keyword: String,
     },
+    /// CR 702.73a: the object is every creature type.
+    AddAllCreatureTypes,
+    /// CR 613.1c: layer 5 colour setting. An EMPTY list is colourless, which
+    /// is the whole content of Devoid (CR 702.114a) — absence of colour is a
+    /// value here, not a missing field.
+    SetColor {
+        colors: Vec<crate::filter::ManaColor>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -38,6 +46,8 @@ pub enum StaticMode {
     CantUntap,
     /// CR 509.1b: the object cannot be chosen as a blocker's target.
     CantBeBlocked,
+    /// CR 508.1d: the object must be declared as an attacker if able.
+    MustAttack,
 }
 
 /// CR 613.1: a game-state predicate that gates a continuous effect.

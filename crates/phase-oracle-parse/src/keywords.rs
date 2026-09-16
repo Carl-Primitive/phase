@@ -8,8 +8,8 @@
 
 use phase_oracle_ast::{
     AbilityCost, AbilityDefinition, AbilityKind, AbilityTag, ActivationRestriction, ControllerRef,
-    Effect, Keyword, KeywordCost, ManaColor, ManaCost, ProtectionQuality, TargetFilter,
-    TypedFilter, WrappedKeywordCost,
+    Effect, Keyword, KeywordCost, ManaColor, ManaCost, ProtectionQuality, StaticAbility,
+    TargetFilter, TypedFilter, WrappedKeywordCost,
 };
 
 use crate::cost::ability_cost;
@@ -234,4 +234,32 @@ fn protection_quality(i: In<'_>) -> Option<(In<'_>, ProtectionQuality)> {
     }
     let (r, _) = crate::prim::phrase("multicolored")(i).ok()?;
     Some((r, ProtectionQuality::Multicolored))
+}
+
+/// Keywords that ARE a characteristic-defining static ability. CR 604.3.
+///
+/// Both are printed as a bare word, so the bare-keyword vocabulary rejects them
+/// — hoisting the word alone would drop the characteristic it sets. Building
+/// the static is the way back in, the same route Cycling took.
+pub fn characteristic_keyword_line(i: In<'_>) -> Option<(Keyword, StaticAbility)> {
+    use phase_oracle_ast::Modification;
+
+    let name = i.first_word()?;
+    let (printed, modification) = match name.as_str() {
+        // CR 702.73a.
+        "changeling" => ("Changeling", Modification::AddAllCreatureTypes),
+        // CR 702.114a: no colour at all, which an empty list expresses.
+        "devoid" => ("Devoid", Modification::SetColor { colors: Vec::new() }),
+        _ => return None,
+    };
+    if !crate::line::is_exhausted(i.take_from_n(1)) {
+        return None;
+    }
+
+    let mut sa = StaticAbility::continuous(TargetFilter::SelfRef, vec![modification]);
+    // CR 604.3: a characteristic-defining ability applies in every zone and
+    // does not use the stack, which the engine records with this flag.
+    sa.characteristic_defining = true;
+    sa.description = None;
+    Some((Keyword::Simple(printed.to_string()), sa))
 }

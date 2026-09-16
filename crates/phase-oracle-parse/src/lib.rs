@@ -121,6 +121,10 @@ pub fn parse_card(name: &str, oracle: &str) -> CardParse {
                 out.keywords.append(&mut kws);
                 out.abilities.push(*a);
             }
+            Ok(Lowered::KeywordWithStatic(mut kws, sa)) => {
+                out.keywords.append(&mut kws);
+                out.static_abilities.push(*sa);
+            }
             Ok(Lowered::SpellBody(chain, desc, may)) => {
                 spell_run_at.get_or_insert(out.abilities.len());
                 spell_run.push((chain, desc, may));
@@ -194,6 +198,10 @@ enum Lowered {
     /// A keyword that generates behaviour as well as an entry: the entry goes
     /// in `keywords`, the ability the keyword stands for goes in `abilities`.
     KeywordWithAbility(Vec<Keyword>, Box<AbilityDefinition>),
+    /// A keyword that IS a characteristic-defining static ability (CR 604.3):
+    /// the entry goes in `keywords`, the ability it defines in
+    /// `static_abilities`.
+    KeywordWithStatic(Vec<Keyword>, Box<phase_oracle_ast::StaticAbility>),
     /// A spell line, left unassembled so consecutive ones can fold together.
     SpellBody(Vec<line::Part>, String, bool),
     Replacement(Box<phase_oracle_ast::Replacement>),
@@ -288,6 +296,9 @@ fn parse_line(l: &Line<'_>, src: &str) -> Result<Lowered, Decline> {
     if let Some((kw, a)) = keywords::cycling_line(stream) {
         return Ok(Lowered::KeywordWithAbility(vec![kw], Box::new(a)));
     }
+    if let Some((kw, sa)) = keywords::characteristic_keyword_line(stream) {
+        return Ok(Lowered::KeywordWithStatic(vec![kw], Box::new(sa)));
+    }
     if let Some(a) = keywords::equip_line(stream, &l.description) {
         return Ok(Lowered::Ability(Box::new(a)));
     }
@@ -296,10 +307,10 @@ fn parse_line(l: &Line<'_>, src: &str) -> Result<Lowered, Decline> {
         return activated_line(l, src, colon).map(|a| Lowered::Ability(Box::new(a)));
     }
 
-    // CR 509.1b: "~ can't be blocked" grants no modification — the whole
-    // ability IS the mode — so it is a static with an empty modification list
-    // rather than anything the effect grammar could produce.
-    if let Some(sa) = cant_be_blocked(l, src) {
+    // A restriction line grants no MODIFICATION — the whole ability is its
+    // mode — so it is a static with an empty modification list rather than
+    // anything the effect grammar could produce.
+    if let Some(sa) = mode_only_static(l, src) {
         return Ok(Lowered::Statics(vec![sa]));
     }
 
@@ -356,20 +367,45 @@ fn static_description(line: &str) -> String {
 /// real sentence after it. Two shapes are deliberately NOT stripped: a chapter
 /// head ("I —", "II, III —"), whose numeral is structural, and a modal header
 /// ("Choose one —"), which has nothing after the dash on its own line.
-/// `<subject> can't be blocked.` — CR 509.1b.
-fn cant_be_blocked(l: &Line<'_>, src: &str) -> Option<phase_oracle_ast::StaticAbility> {
+/// `<subject> <restriction>.` — a static whose whole content is its mode.
+///
+/// One production over a table rather than one arm per restriction: the subject
+/// grammar is shared, the modification list is empty in every case, and the
+/// only thing that varies is which mode the printed phrase names.
+fn mode_only_static(l: &Line<'_>, src: &str) -> Option<phase_oracle_ast::StaticAbility> {
     use phase_oracle_ast::{StaticAbility, StaticMode};
+
+    // Apostrophes are printed both ways across the corpus, so each phrase is
+    // listed in both spellings rather than normalized in the lexer — the lexer
+    // keeps an internal apostrophe inside its word by design.
+    const MODES: &[(&str, StaticMode)] = &[
+        ("can't be blocked", StaticMode::CantBeBlocked),
+        ("cant be blocked", StaticMode::CantBeBlocked),
+        ("can't block", StaticMode::CantBlock),
+        ("cant block", StaticMode::CantBlock),
+        ("can't attack", StaticMode::CantAttack),
+        ("cant attack", StaticMode::CantAttack),
+        ("attacks each combat if able", StaticMode::MustAttack),
+        (
+            "doesn't untap during your untap step",
+            StaticMode::CantUntap,
+        ),
+        ("doesnt untap during your untap step", StaticMode::CantUntap),
+        (
+            "doesn't untap during its controller's untap step",
+            StaticMode::CantUntap,
+        ),
+    ];
 
     let stream = Tokens::new(l.toks, src);
     let (rest, s) = target::subject(stream).ok()?;
-    let (rest, _) =
-        prim::phrase_alt(&[("can't be blocked", ()), ("cant be blocked", ())])(rest).ok()?;
+    let (rest, mode) = prim::phrase_alt(MODES)(rest).ok()?;
     if !line::is_exhausted(rest) {
         return None;
     }
 
     let mut sa = StaticAbility::continuous(s.filter, Vec::new());
-    sa.mode = StaticMode::CantBeBlocked;
+    sa.mode = mode;
     sa.description = Some(l.description.clone());
     Some(sa)
 }

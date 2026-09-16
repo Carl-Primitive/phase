@@ -99,6 +99,7 @@ fn main() {
     let mut decline_samples: BTreeMap<&'static str, Vec<String>> = BTreeMap::new();
     let mut blocked_by: BTreeMap<String, usize> = BTreeMap::new();
     let mut near_miss: BTreeMap<String, usize> = BTreeMap::new();
+    let mut by_line: BTreeMap<String, usize> = BTreeMap::new();
     let mut near_samples: Vec<String> = Vec::new();
     let mut one_line_short = 0usize;
     let blocking = std::env::var("PARITY_BLOCKING").ok();
@@ -146,6 +147,10 @@ fn main() {
                 .trim_matches(|c: char| !c.is_alphanumeric() && c != '{' && c != '~')
                 .to_lowercase();
             *by_head.entry(head).or_default() += 1;
+            // Magic reuses whole sentences across hundreds of cards, so the
+            // most frequent declining LINE is a far sharper target than the
+            // most frequent declining word.
+            *by_line.entry(d.text.clone()).or_default() += 1;
         }
 
         if !p.is_complete() {
@@ -370,6 +375,15 @@ fn main() {
         println!("\nnear-miss samples:");
         for s in near_samples.iter().take(24) {
             println!("   {s}");
+        }
+    }
+
+    if blocking.is_some() {
+        println!("\nmost frequent declining lines:");
+        let mut v: Vec<_> = by_line.into_iter().filter(|(_, n)| *n >= 12).collect();
+        v.sort_by_key(|(_, n)| std::cmp::Reverse(*n));
+        for (line, n) in v.into_iter().take(40) {
+            println!("  {n:>5}  {}", line.chars().take(96).collect::<String>());
         }
     }
 
