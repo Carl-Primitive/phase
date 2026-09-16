@@ -264,6 +264,9 @@ fn parse_line(l: &Line<'_>, src: &str) -> Result<Lowered, Decline> {
     if let Some(kw) = keywords::enchant_line(stream) {
         return Ok(Lowered::Keywords(vec![kw]));
     }
+    if let Some(kw) = keywords::costed_keyword_line(stream) {
+        return Ok(Lowered::Keywords(vec![kw]));
+    }
     if let Some(a) = keywords::equip_line(stream, &l.description) {
         return Ok(Lowered::Ability(Box::new(a)));
     }

@@ -1850,3 +1850,70 @@ fn if_you_dont_is_deliberately_not_built() {
     );
     assert!(!p.is_complete());
 }
+
+// ---------------------------------------------------------------------------
+// Costed keywords and dual-colour mana
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_costed_keyword_line_is_keyed_by_its_own_name() {
+    // The engine keys the payload by the keyword rather than tagging it, so a
+    // costed keyword is a one-entry map.
+    let v = parsed("Whatever", "Morph {2}{U}");
+    assert_eq!(
+        v["keywords"],
+        json!([{"Morph": {"type": "Cost", "shards": ["Blue"], "generic": 2}}])
+    );
+}
+
+#[test]
+fn the_payload_family_is_a_fact_about_the_engine_not_about_the_card() {
+    // "Morph {2}{U}" and "Ward {2}" read identically and serialize
+    // differently: one carries a bare cost, the other a tagged envelope. The
+    // printed text cannot tell them apart, so the family is looked up.
+    let bare = parsed("Whatever", "Foretell {1}{U}");
+    assert_eq!(
+        bare["keywords"][0]["Foretell"],
+        json!({"type": "Cost", "shards": ["Blue"], "generic": 1})
+    );
+
+    let wrapped = parsed("Whatever", "Ward {2}");
+    assert_eq!(
+        wrapped["keywords"][0]["Ward"],
+        json!({"type": "Mana", "data": {"type": "Cost", "shards": [], "generic": 2}})
+    );
+}
+
+#[test]
+fn a_costed_keyword_that_also_generates_behaviour_is_not_hoisted() {
+    // Cycling draws a card; hoisting the keyword alone would drop that. Same
+    // rule as for bare keywords, and it is why Flashback, Evoke and Bestow were
+    // added to the list and then removed again.
+    for text in ["Cycling {2}", "Flashback {1}{B}", "Madness {1}{R}"] {
+        let p = parse_card("Whatever", text);
+        assert!(
+            !p.is_complete(),
+            "{text} generates behaviour beyond the keyword entry"
+        );
+    }
+}
+
+#[test]
+fn add_one_colour_or_another_is_a_choice_not_a_list() {
+    // The dual-land shape. "{T}: Add {U} or {B}" produces ONE mana of a chosen
+    // colour, which the engine spells the same way as "one mana of any color"
+    // — a count plus the options — rather than as two symbols.
+    let v = abilities("Underground Sea", "{T}: Add {U} or {B}.");
+    assert_eq!(
+        v[0]["effect"]["produced"],
+        json!({
+            "type": "AnyOneColor",
+            "count": {"type": "Fixed", "value": 1},
+            "color_options": ["Blue", "Black"]
+        })
+    );
+
+    // Contrast an actual list, which is fixed.
+    let fixed = abilities("Dark Ritual", "Add {B}{B}{B}.");
+    assert_eq!(fixed[0]["effect"]["produced"]["type"], "Fixed");
+}

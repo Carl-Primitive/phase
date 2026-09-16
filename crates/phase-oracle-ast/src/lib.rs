@@ -31,6 +31,7 @@ pub use cost::{
     AbilityCost, CounterMatch, CounterSelection, ManaCost, ManaShard, SacrificeCost,
     TapRequirement, TapRequirementKind,
 };
+
 pub use effect::{ChoiceTiming, CounterType, Effect, ManaProduced, TapScope, TapState, ZoneName};
 pub use filter::{
     AttachmentKind, Comparator, ControllerRef, FilterProp, ManaColor, PtScope, PtStat,
@@ -68,6 +69,33 @@ pub enum Keyword {
         #[serde(rename = "Enchant")]
         filter: TargetFilter,
     },
+    /// A keyword printed with a cost: "Flashback {1}{B}", "Morph {2}{U}".
+    ///
+    /// A one-entry map, because the engine keys the payload by the keyword's
+    /// own name rather than tagging it. The payload SHAPE differs by keyword
+    /// and is not something the printed text reveals — see [`KeywordCost`].
+    Costed(std::collections::BTreeMap<String, KeywordCost>),
+}
+
+/// The payload a costed keyword carries.
+///
+/// Two families, and which one a keyword belongs to is a fact about the ENGINE
+/// rather than about the card: Morph and Foretell carry a bare `ManaCost`,
+/// while Flashback and Evoke wrap the same thing in a tagged envelope that can
+/// also hold a non-mana cost. The printed text is identical either way, so the
+/// family is looked up per keyword rather than inferred.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(untagged)]
+pub enum KeywordCost {
+    Bare(cost::ManaCost),
+    Wrapped(WrappedKeywordCost),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "type", content = "data")]
+pub enum WrappedKeywordCost {
+    Mana(cost::ManaCost),
+    PayLife(u32),
 }
 
 /// CR 700.2: metadata for a modal spell or ability.

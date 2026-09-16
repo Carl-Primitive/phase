@@ -465,6 +465,32 @@ fn add_mana(i: In<'_>) -> R<'_, ManaProduced> {
         }
     }
 
+    // "Add {U} or {B}" — a CHOICE between colours, not a list of them. This is
+    // the dual-land shape, and the engine spells it the same way it spells
+    // "one mana of any color": a count plus the options.
+    if let Ok((r2, first)) = one_color_symbol(r) {
+        let mut options = vec![first];
+        let mut rest = r2;
+        while let Ok((r3, _)) = word("or")(rest) {
+            match one_color_symbol(r3) {
+                Ok((r4, c)) => {
+                    options.push(c);
+                    rest = r4;
+                }
+                Err(_) => break,
+            }
+        }
+        if options.len() > 1 {
+            return Ok((
+                rest,
+                ManaProduced::AnyOneColor {
+                    count: Quantity::fixed(1),
+                    color_options: options,
+                },
+            ));
+        }
+    }
+
     // A run of mana symbols. Colourless is counted rather than listed, because
     // `{C}{C}` is two of one thing.
     let (mut rest, first) = crate::prim::mana_symbol(r)?;
@@ -506,6 +532,19 @@ fn add_mana(i: In<'_>) -> R<'_, ManaProduced> {
         // A mixed run is a shape the engine spells differently; decline rather
         // than guess which half wins.
         (false, _) => fail(i),
+    }
+}
+
+/// A single coloured mana symbol, for the "add {U} or {B}" choice.
+fn one_color_symbol(i: In<'_>) -> R<'_, ManaColor> {
+    let (r, sym) = crate::prim::mana_symbol(i)?;
+    match sym {
+        ManaSym::Shard(ManaShard::White) => Ok((r, ManaColor::White)),
+        ManaSym::Shard(ManaShard::Blue) => Ok((r, ManaColor::Blue)),
+        ManaSym::Shard(ManaShard::Black) => Ok((r, ManaColor::Black)),
+        ManaSym::Shard(ManaShard::Red) => Ok((r, ManaColor::Red)),
+        ManaSym::Shard(ManaShard::Green) => Ok((r, ManaColor::Green)),
+        _ => fail(i),
     }
 }
 
@@ -966,7 +1005,6 @@ const KEYWORDS: &[&str] = &[
     "wither",
     "horsemanship",
     "shadow",
-    "devoid",
     "prowess",
     "skulk",
     "convoke",
@@ -1024,6 +1062,10 @@ fn keyword_list(i: In<'_>) -> R<'_, Vec<String>> {
 /// modification and nothing is being dropped. Derived from every `AddKeyword`
 /// the engine emits.
 const GRANTABLE_KEYWORDS: &[&str] = &[
+    // CR 105.2c: Devoid SETS a characteristic, so hoisting it as a bare
+    // keyword drops the static ability that does so — but granting it is an
+    // ordinary modification.
+    "devoid",
     "changeling",
     "exalted",
     "myriad",

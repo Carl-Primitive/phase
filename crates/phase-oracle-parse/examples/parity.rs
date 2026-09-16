@@ -231,7 +231,7 @@ fn main() {
                 _ => ("abilities", mine(&p.out.abilities), arr(card, "abilities")),
             };
             examples.push(format!(
-                "--- {name}\n    text:  {}\n    {k} mine:   {}\n    {k} their:  {}",
+                "--- {name} [{bucket}]\n    text:  {}\n    {k} mine:   {}\n    {k} their:  {}",
                 text.replace('\n', " | "),
                 serde_json::to_string(&m).unwrap_or_default(),
                 serde_json::to_string(&t).unwrap_or_default()

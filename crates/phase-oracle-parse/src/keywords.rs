@@ -8,7 +8,7 @@
 
 use phase_oracle_ast::{
     AbilityCost, AbilityDefinition, AbilityKind, AbilityTag, ActivationRestriction, ControllerRef,
-    Effect, Keyword, TargetFilter, TypedFilter,
+    Effect, Keyword, KeywordCost, ManaCost, TargetFilter, TypedFilter, WrappedKeywordCost,
 };
 
 use crate::cost::ability_cost;
@@ -76,3 +76,68 @@ pub type Stream<'a> = Tokens<'a>;
 /// Keep the cost module's single-authority rule visible from here: a caller
 /// never inspects an individual cost component.
 const _: fn(In<'_>) -> Option<AbilityCost> = ability_cost;
+
+/// Keywords printed with a cost, and which payload family each one uses.
+///
+/// `false` means a BARE `ManaCost`; `true` means the tagged envelope.
+///
+/// Flashback, Evoke and Bestow were added here and REMOVED again: they never
+/// appear as a card's only line, so the purity test had no evidence either way,
+/// and each turned out to generate a trigger the hoist would have dropped.
+/// Absence of counter-evidence is not evidence. Which
+/// family a keyword belongs to is a fact about the engine's representation, not
+/// something the printed text reveals — "Morph {2}{U}" and "Flashback {1}{B}"
+/// read identically and serialize differently — so it is looked up rather than
+/// inferred.
+///
+/// Only keywords whose line produces NOTHING BUT a `keywords` entry are listed,
+/// and membership was checked across every card carrying the keyword rather
+/// than across the handful whose entire text is that one line — a sample small
+/// enough to be actively misleading. Megamorph (31 of 31 cards), Madness (61 of
+/// 61) and Buyback (42 of 42) always produce a replacement or an additional
+/// cost as well, and were removed after that check; Cycling, Echo and Unearth
+/// generate an ability or a trigger and never made the list.
+const COSTED_KEYWORDS: &[(&str, bool)] = &[
+    ("morph", false),
+    ("foretell", false),
+    ("disturb", false),
+    ("dash", false),
+    ("spectacle", false),
+    ("warp", false),
+    ("mayhem", false),
+    ("freerunning", false),
+    ("ward", true),
+];
+
+/// `<Keyword> <mana cost>` — a keyword line that carries a cost.
+pub fn costed_keyword_line(i: In<'_>) -> Option<Keyword> {
+    let name = i.first_word()?;
+    let (_, wrapped) = COSTED_KEYWORDS.iter().find(|(k, _)| *k == name)?;
+    let rest = i.take_from_n(1);
+
+    let cost = mana_cost_only(rest)?;
+    let payload = if *wrapped {
+        KeywordCost::Wrapped(WrappedKeywordCost::Mana(cost))
+    } else {
+        KeywordCost::Bare(cost)
+    };
+
+    let mut c = name.chars();
+    let cap = c
+        .next()
+        .map(|x| x.to_uppercase().to_string())
+        .unwrap_or_default();
+    let printed = format!("{cap}{}", c.as_str());
+
+    let mut map = std::collections::BTreeMap::new();
+    map.insert(printed, payload);
+    Some(Keyword::Costed(map))
+}
+
+/// A run of mana symbols that consumes the whole remaining line.
+fn mana_cost_only(i: In<'_>) -> Option<ManaCost> {
+    let AbilityCost::Mana { cost } = crate::cost::ability_cost(i)? else {
+        return None;
+    };
+    Some(cost)
+}
