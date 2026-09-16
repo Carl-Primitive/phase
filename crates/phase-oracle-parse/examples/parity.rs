@@ -190,12 +190,6 @@ fn main() {
         }
         complete += 1;
 
-        // A bucket the grammar never emits must also be empty on their side,
-        // otherwise "complete" would be claiming a card whose replacements we
-        // silently dropped.
-        let untouched_buckets = ["additional_cost"];
-        let their_extra = untouched_buckets.iter().find(|k| card.get(**k).is_some());
-
         // Keyword ORDER is compared as a multiset, not a sequence.
         //
         // The reference data is not order-stable for this field: the same
@@ -234,12 +228,19 @@ fn main() {
         } else {
             mine(&p.out.replacements) == arr(card, "replacements")
         };
+        let ac_ok = match &p.out.additional_cost {
+            None => card.get("additional_cost").is_none(),
+            Some(c) => mine(c) == arr(card, "additional_cost"),
+        };
         let modal_ok = match &p.out.modal {
             None => card.get("modal").is_none(),
             Some(m) => mine(m) == arr(card, "modal"),
         };
 
-        if kw_ok && ab_ok && tr_ok && st_ok && modal_ok && rep_ok && their_extra.is_none() {
+        // Every bucket the engine fills is now compared. There is no longer a
+        // "we do not emit this at all" escape hatch, which is the point: a card
+        // counts as matching only when the WHOLE record matches.
+        if kw_ok && ab_ok && tr_ok && st_ok && modal_ok && rep_ok && ac_ok {
             exact += 1;
             continue;
         }
@@ -273,10 +274,6 @@ fn main() {
             // never given. Not a grammar gap: the information is not in the
             // input. Named separately so it cannot be mistaken for one.
             "type-line ability, not in the text"
-        } else if let Some(b) = their_extra {
-            match *b {
-                _ => "dropped: additional_cost",
-            }
         } else if !kw_ok {
             "keywords differ"
         } else if !tr_ok {
@@ -287,6 +284,8 @@ fn main() {
             "modal differs"
         } else if !rep_ok {
             "replacements differ"
+        } else if !ac_ok {
+            "additional cost differs"
         } else {
             "abilities differ"
         };

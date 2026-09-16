@@ -85,7 +85,7 @@ pub struct TriggerDefinition {
     pub description: Option<String>,
     pub constraint: Option<serde_json::Value>,
     /// CR 603.4: the intervening-if clause.
-    pub condition: Option<serde_json::Value>,
+    pub condition: Option<crate::static_ability::Condition>,
     pub batched: bool,
 }
 

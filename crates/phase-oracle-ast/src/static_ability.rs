@@ -75,7 +75,15 @@ pub enum StaticMode {
 #[serde(tag = "type")]
 pub enum Condition {
     /// CR 400.1: at least one object matching `filter` exists.
+    /// POSITIONAL: a STATIC ability's gate uses this spelling, while a
+    /// trigger's intervening-if uses `ControlsType` for the same printed words.
+    /// Measured — `IsPresent` appears 273 times in a static's condition slot
+    /// and never in a trigger's; `ControlsType` 103 times in a trigger's.
     IsPresent {
+        filter: TargetFilter,
+    },
+    /// CR 603.4: the intervening-if spelling of the same test, used by triggers.
+    ControlsType {
         filter: TargetFilter,
     },
     Not {

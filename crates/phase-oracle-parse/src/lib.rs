@@ -142,6 +142,7 @@ pub fn parse_card(name: &str, oracle: &str) -> CardParse {
             }
             Ok(Lowered::Statics(mut sa)) => out.static_abilities.append(&mut sa),
             Ok(Lowered::Replacement(r)) => out.replacements.push(*r),
+            Ok(Lowered::AdditionalCost(c)) => out.additional_cost = Some(*c),
             Ok(Lowered::Ability(a)) => out.abilities.push(*a),
             Ok(Lowered::Trigger(t)) => out.triggers.push(*t),
             Ok(Lowered::TriggerWithModal(t, counts)) => {
@@ -237,6 +238,7 @@ enum Lowered {
     /// A trigger whose body is a modal header; its modes are the bullet lines
     /// that follow.
     TriggerWithModal(Box<TriggerDefinition>, (usize, usize)),
+    AdditionalCost(Box<phase_oracle_ast::AdditionalCost>),
     /// A line that is the permanent's own continuous ability. CR 611.2: an
     /// effect with no printed end lasts as long as its source, so it is not
     /// something a spell does — it is something the permanent IS.
@@ -355,6 +357,12 @@ fn parse_line(l: &Line<'_>, src: &str) -> Result<Lowered, Decline> {
     }
     if let Some(r) = would_be_put_instead(l, src) {
         return Ok(Lowered::Replacement(Box::new(r)));
+    }
+
+    // CR 601.2b: an additional cost is paid while CASTING, so it is neither an
+    // ability nor an effect — it is a property of the card.
+    if let Some(c) = additional_cost_line(l, src) {
+        return Ok(Lowered::AdditionalCost(Box::new(c)));
     }
 
     if trigger::looks_like_trigger(stream) {
@@ -545,6 +553,30 @@ fn enters_replacement(l: &Line<'_>, src: &str) -> Option<phase_oracle_ast::Repla
         condition: None,
         destination_zone: Some(ZoneName::Battlefield),
     })
+}
+
+/// `As an additional cost to cast this spell, <cost>.` — CR 601.2b.
+///
+/// Goes through the same cost resolver every activation cost uses, so the
+/// single-authority rule holds here too: no caller inspects a component.
+fn additional_cost_line(l: &Line<'_>, src: &str) -> Option<phase_oracle_ast::AdditionalCost> {
+    let stream = Tokens::new(l.toks, src);
+    let (rest, _) = prim::phrase("as an additional cost to cast this spell")(stream).ok()?;
+    let rest = match rest.first() {
+        Some(t) if t.kind == TokenKind::Comma => rest.take_from_n(1),
+        _ => return None,
+    };
+
+    // The cost resolver wants a slice with no trailing punctuation, since it
+    // must consume every token it is handed.
+    let end = rest
+        .toks
+        .iter()
+        .position(|t| matches!(t.kind, TokenKind::Period))
+        .unwrap_or(rest.toks.len());
+    let cost = cost::ability_cost(Tokens::new(&rest.toks[..end], src))?;
+    line::is_exhausted(rest.take_from_n(end))
+        .then_some(phase_oracle_ast::AdditionalCost::Required(cost))
 }
 
 /// `If ~ would be put into a graveyard from anywhere, exile it instead.`
@@ -860,6 +892,15 @@ fn triggered_line(l: &Line<'_>, src: &str) -> Result<Lowered, Decline> {
         return Err(decline(l, "trigger_head", DeclineReason::UnknownLineShape));
     };
 
+    // CR 603.4: an intervening-if sits BETWEEN the event and the effect —
+    // "when ~ enters, IF you control another Knight, do X" — so it is read
+    // here, after the head's comma and before the body.
+    //
+    // A trigger spells the presence test `ControlsType` where a static ability
+    // spells the same printed words `IsPresent`. Measured: 103 against 0 one
+    // way, 273 against 0 the other. Positional, like several shapes before it.
+    let (rest, intervening) = intervening_if(rest);
+
     // The comma after the event is the structural boundary between head and
     // effect. Without it the line is some other shape the grammar has not built.
     let Some(t) = rest.first() else {
@@ -922,10 +963,50 @@ fn triggered_line(l: &Line<'_>, src: &str) -> Result<Lowered, Decline> {
             .then_some(phase_oracle_ast::TargetFilter::Player)
     });
     td.constraint = head.constraint;
+    td.condition = intervening;
     td.optional = optional;
     td.trigger_zones = trigger_zones(&td);
     td.description = Some(l.description.clone());
     Ok(Lowered::Trigger(Box::new(td)))
+}
+
+/// `, if you control <filter>,` between a trigger's event and its effect.
+///
+/// CR 603.4. Only the presence form is built; an unrecognized intervening-if
+/// leaves its tokens in place and fails the line's totality check, the same way
+/// an unbuilt effect does.
+fn intervening_if(i: Tokens<'_>) -> (Tokens<'_>, Option<phase_oracle_ast::Condition>) {
+    use phase_oracle_ast::{Condition, ControllerRef, FilterProp, TargetFilter, Zone};
+
+    let after_comma = match i.first() {
+        Some(t) if t.kind == TokenKind::Comma => i.take_from_n(1),
+        _ => return (i, None),
+    };
+    let Ok((r, _)) = prim::phrase("if you control")(after_comma) else {
+        return (i, None);
+    };
+    let Ok((r, s)) = target::subject(r) else {
+        return (i, None);
+    };
+    let TargetFilter::Typed(mut t) = s.filter else {
+        return (i, None);
+    };
+    t.controller = Some(ControllerRef::You);
+    if !t
+        .properties
+        .iter()
+        .any(|p| matches!(p, FilterProp::InZone { .. }))
+    {
+        t.properties.push(FilterProp::InZone {
+            zone: Zone::Battlefield,
+        });
+    }
+    (
+        r,
+        Some(Condition::ControlsType {
+            filter: TargetFilter::Typed(t),
+        }),
+    )
 }
 
 /// A trigger carrying everything its HEAD established, with an empty execute.

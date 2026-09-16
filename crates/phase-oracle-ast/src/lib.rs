@@ -177,6 +177,18 @@ pub struct CardOutput {
     pub replacements: Vec<Replacement>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub modal: Option<ModalChoice>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub additional_cost: Option<AdditionalCost>,
+}
+
+/// CR 601.2b: a cost paid as part of casting, beyond the mana cost.
+///
+/// `Required` is the mandatory form; the engine's optional and keyword forms
+/// (Kicker, Casualty) carry different payloads and are not built here.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "type", content = "data")]
+pub enum AdditionalCost {
+    Required(cost::AbilityCost),
 }
 
 impl CardOutput {
@@ -187,5 +199,6 @@ impl CardOutput {
             && self.static_abilities.is_empty()
             && self.replacements.is_empty()
             && self.modal.is_none()
+            && self.additional_cost.is_none()
     }
 }

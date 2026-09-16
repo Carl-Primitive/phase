@@ -2431,3 +2431,64 @@ fn a_block_restriction_and_a_blocked_by_restriction_are_different_modes() {
         .clone();
     assert!(by[0]["mode"].get("CantBeBlockedBy").is_some());
 }
+
+// ---------------------------------------------------------------------------
+// Intervening-if and additional costs
+// ---------------------------------------------------------------------------
+
+#[test]
+fn an_intervening_if_sits_between_the_event_and_the_effect() {
+    // CR 603.4. And the presence test is POSITIONAL: a trigger spells it
+    // `ControlsType` where a static ability spells the same printed words
+    // `IsPresent`. Measured 103-to-0 one way and 273-to-0 the other.
+    let v = triggers(
+        "Whatever",
+        "When ~ enters, if you control another Knight, draw a card.",
+    );
+    assert_eq!(
+        v[0]["condition"],
+        json!({
+            "type": "ControlsType",
+            "filter": {
+                "type": "Typed",
+                "type_filters": [{"Subtype": "Knight"}],
+                "controller": "You",
+                "properties": [{"type": "Another"}, {"type": "InZone", "zone": "Battlefield"}]
+            }
+        })
+    );
+    assert_eq!(v[0]["execute"]["effect"]["type"], "Draw");
+
+    // The static spelling of the same words.
+    let s = parsed("Kird Ape", "~ gets +1/+2 as long as you control a Forest.")["static_abilities"]
+        .clone();
+    assert_eq!(s[0]["condition"]["type"], "IsPresent");
+}
+
+#[test]
+fn an_additional_cost_is_a_property_of_the_card_not_an_ability() {
+    // CR 601.2b: it is paid while CASTING, so it is neither an ability nor an
+    // effect. It goes through the same cost resolver every activation cost
+    // uses, so no caller inspects a component.
+    let v = parsed(
+        "Whatever",
+        "As an additional cost to cast this spell, sacrifice a creature.",
+    );
+    assert_eq!(
+        v["additional_cost"],
+        json!({
+            "type": "Required",
+            "data": {
+                "type": "Sacrifice",
+                "target": {
+                    "type": "Typed",
+                    "type_filters": ["Creature"],
+                    "controller": null,
+                    "properties": []
+                },
+                "count": 1
+            }
+        })
+    );
+    assert!(v.get("abilities").is_none());
+}
