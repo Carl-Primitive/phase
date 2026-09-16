@@ -2202,3 +2202,79 @@ fn a_restriction_keeps_the_subject_the_line_printed() {
         json!([{"type": "EnchantedBy"}])
     );
 }
+
+// ---------------------------------------------------------------------------
+// Numeric keywords, entry replacements, and a mode that carries data
+// ---------------------------------------------------------------------------
+
+#[test]
+fn crews_argument_is_a_power_threshold_not_a_cost() {
+    // CR 702.122a. It shares a line shape with the costed keywords and nothing
+    // else, so it carries its own payload.
+    let v = parsed("Whatever", "Crew 2");
+    assert_eq!(
+        v["keywords"],
+        json!([{"Crew": {"power": 2, "once_per_turn": null}}])
+    );
+}
+
+#[test]
+fn entering_with_counters_is_a_replacement_like_entering_tapped() {
+    // Both describe HOW the object arrives, so they share a head and an event.
+    let fixed = parsed(
+        "Whatever",
+        "This creature enters with three +1/+1 counters on it.",
+    );
+    assert_eq!(
+        fixed["replacements"][0]["execute"]["effect"],
+        json!({
+            "type": "PutCounter",
+            "counter_type": "P1P1",
+            "count": {"type": "Fixed", "value": 3},
+            "target": {"type": "SelfRef"}
+        })
+    );
+    assert_eq!(fixed["replacements"][0]["event"], "Moved");
+
+    // CR 107.3i: X here is the value paid for the spell's COST, a different
+    // reference from the X a resolving ability announces.
+    let variable = parsed(
+        "Endless One",
+        "This creature enters with X +1/+1 counters on it.",
+    );
+    assert_eq!(
+        variable["replacements"][0]["execute"]["effect"]["count"],
+        json!({"type": "Ref", "qty": {"type": "CostXPaid"}})
+    );
+}
+
+#[test]
+fn a_blocking_restriction_can_name_who_is_stopped() {
+    // CR 509.1b. The mode carries data where the plain restrictions carry none,
+    // and the engine prints it as an object rather than a bare string.
+    let v = parsed(
+        "Whatever",
+        "This creature can't be blocked by creatures with power 2 or less.",
+    )["static_abilities"]
+        .clone();
+    assert_eq!(
+        v[0]["mode"],
+        json!({
+            "CantBeBlockedBy": {
+                "filter": {
+                    "type": "Typed",
+                    "type_filters": ["Creature"],
+                    "controller": null,
+                    "properties": [{
+                        "type": "PtComparison",
+                        "stat": "Power",
+                        "scope": "Current",
+                        "comparator": "LE",
+                        "value": {"type": "Fixed", "value": 2}
+                    }]
+                }
+            }
+        })
+    );
+    assert_eq!(v[0]["affected"], json!({"type": "SelfRef"}));
+}

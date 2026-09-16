@@ -318,7 +318,7 @@ fn parse_line(l: &Line<'_>, src: &str) -> Result<Lowered, Decline> {
     // rather than resolving, so it belongs in `replacements` and not among the
     // abilities. It is matched before the spell grammar because "enters" would
     // otherwise look like an ordinary subject-initial clause.
-    if let Some(r) = enters_tapped(l, src) {
+    if let Some(r) = enters_replacement(l, src) {
         return Ok(Lowered::Replacement(Box::new(r)));
     }
 
@@ -399,6 +399,24 @@ fn mode_only_static(l: &Line<'_>, src: &str) -> Option<phase_oracle_ast::StaticA
 
     let stream = Tokens::new(l.toks, src);
     let (rest, s) = target::subject(stream).ok()?;
+
+    // "can't be blocked BY <filter>" names which creatures are stopped, so the
+    // mode carries data where the others carry none.
+    if let Ok((r, _)) =
+        prim::phrase_alt(&[("can't be blocked by", ()), ("cant be blocked by", ())])(rest)
+    {
+        let (r, blocker) = target::subject(r).ok()?;
+        if !line::is_exhausted(r) {
+            return None;
+        }
+        let mut sa = StaticAbility::continuous(s.filter, Vec::new());
+        sa.mode = StaticMode::CantBeBlockedBy {
+            filter: blocker.filter,
+        };
+        sa.description = Some(l.description.clone());
+        return Some(sa);
+    }
+
     let (rest, mode) = prim::phrase_alt(MODES)(rest).ok()?;
     if !line::is_exhausted(rest) {
         return None;
@@ -410,34 +428,65 @@ fn mode_only_static(l: &Line<'_>, src: &str) -> Option<phase_oracle_ast::StaticA
     Some(sa)
 }
 
-/// `~ enters tapped.` — CR 614.1c.
+/// `~ enters tapped.` / `~ enters with N counters on it.` — CR 614.1c.
 ///
-/// The commonest replacement in the corpus by a wide margin. The engine spells
-/// it as a `Moved` event into the battlefield whose execute taps the object,
-/// which is why it is a replacement rather than the `SetTapState` effect the
-/// same words would produce in an instruction.
-fn enters_tapped(l: &Line<'_>, src: &str) -> Option<phase_oracle_ast::Replacement> {
+/// The commonest replacements in the corpus. Both are `Moved` events into the
+/// battlefield whose execute does the work — which is why they are replacements
+/// rather than the effects the same words would produce as instructions.
+fn enters_replacement(l: &Line<'_>, src: &str) -> Option<phase_oracle_ast::Replacement> {
     use phase_oracle_ast::{
-        AbilityDefinition, Effect, Replacement, ReplacementEvent, ReplacementMode, TapScope,
-        TapState, TargetFilter, ZoneName,
+        AbilityDefinition, Effect, Quantity, QuantityRef, Replacement, ReplacementEvent,
+        ReplacementMode, TapScope, TapState, TargetFilter, ZoneName,
     };
 
     let stream = Tokens::new(l.toks, src);
     let (rest, _) = prim::self_ref(stream).ok()?;
-    let (rest, _) = prim::phrase("enters tapped")(rest).ok()?;
+    let (rest, _) = prim::phrase("enters")(rest).ok()?;
+
+    // Two shapes share this head, and both describe HOW the object arrives
+    // rather than telling anyone to do something.
+    let (rest, effect) = if let Ok((r, _)) = prim::word("tapped")(rest) {
+        (
+            r,
+            Effect::SetTapState {
+                target: TargetFilter::SelfRef,
+                scope: TapScope::Single,
+                state: TapState::Tap,
+            },
+        )
+    } else {
+        let (r, _) = prim::word("with")(rest).ok()?;
+        // CR 107.3i: an X here is the value paid for the spell's cost, which
+        // is a different reference from the X a resolving ability announces.
+        let (r, count) = match prim::word("x")(r) {
+            Ok((r2, _)) => (
+                r2,
+                Quantity::Ref {
+                    qty: QuantityRef::CostXPaid,
+                },
+            ),
+            Err(_) => prim::quantity(r).ok()?,
+        };
+        let (r, counter_type) = prim::counter_type(r).ok()?;
+        let (r, _) = prim::any_of(&["counter", "counters"])(r).ok()?;
+        let (r, _) = prim::phrase_alt(&[("on it", ()), ("on ~", ())])(r).ok()?;
+        (
+            r,
+            Effect::PutCounter {
+                counter_type,
+                count,
+                target: TargetFilter::SelfRef,
+            },
+        )
+    };
+
     if !line::is_exhausted(rest) {
         return None;
     }
 
-    let execute = AbilityDefinition::spell(Effect::SetTapState {
-        target: TargetFilter::SelfRef,
-        scope: TapScope::Single,
-        state: TapState::Tap,
-    });
-
     Some(Replacement {
         event: ReplacementEvent::Moved,
-        execute,
+        execute: AbilityDefinition::spell(effect),
         mode: ReplacementMode::Mandatory,
         valid_card: Some(TargetFilter::SelfRef),
         description: Some(l.description.clone()),
@@ -600,6 +649,9 @@ fn bare_keyword(i: Tokens<'_>) -> Option<(Tokens<'_>, Keyword)> {
         }
     }
     if let Some(v) = keywords::protection_keyword(i) {
+        return Some(v);
+    }
+    if let Some(v) = keywords::crew_keyword(i) {
         return Some(v);
     }
     if let Some(v) = keywords::costed_keyword(i) {

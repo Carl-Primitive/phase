@@ -78,12 +78,26 @@ pub enum Keyword {
         #[serde(rename = "Protection")]
         quality: ProtectionQuality,
     },
+    /// CR 702.122a: "Crew 2". The argument is a POWER threshold rather than a
+    /// cost, so it carries its own shape.
+    Crew {
+        #[serde(rename = "Crew")]
+        crew: CrewCost,
+    },
     /// A keyword printed with a cost: "Flashback {1}{B}", "Morph {2}{U}".
     ///
     /// A one-entry map, because the engine keys the payload by the keyword's
     /// own name rather than tagging it. The payload SHAPE differs by keyword
     /// and is not something the printed text reveals — see [`KeywordCost`].
     Costed(std::collections::BTreeMap<String, KeywordCost>),
+}
+
+/// CR 702.122a: the total power that must be tapped to crew.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct CrewCost {
+    pub power: u32,
+    /// Printed by the engine even when absent, so it is not skipped.
+    pub once_per_turn: Option<bool>,
 }
 
 /// What a protection keyword protects from. CR 702.16e.

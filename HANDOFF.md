@@ -114,8 +114,12 @@ cargo run -q --release --example corpus_coverage --features corpus \
 # Parity, the number that matters
 cargo run -q --release --example parity --features corpus \
   -p phase-oracle-parse -- oracle-corpus.json
-#   --show N           print N disagreements in full
+#   --show N                   print N disagreements in full
 #   PARITY_SAMPLE_DECLINES=1   sample declined lines per production
+#   PARITY_HEAD=destroy        sample only lines starting with that word
+#   PARITY_BLOCKING=1          THE work list: most frequent declining LINES,
+#                              near misses by production, and the engine's own
+#                              effect vocabulary on cards we could not finish
 
 # ONE card, when a corpus number needs turning back into a production
 cargo run -q --example explain -p phase-oracle-parse -- "Card Name" "Oracle text"
@@ -161,6 +165,12 @@ The differ is worth rebuilding if lost; it is what turns 250 disagreements into
 six actionable lines. `explain` is the companion: it turns one line of that
 output back into a concrete production.
 
+For COVERAGE rather than correctness, `PARITY_BLOCKING=1` is the tool, and its
+sharpest output is the frequency census of declining LINES. Magic reuses whole
+sentences across hundreds of printings, so "Devoid" appearing 134 times and
+"~ can't block" 96 times is a far better target list than any census of words —
+the head census scattered those same cards across a dozen unrelated buckets.
+
 **Verify before generalizing.** Three rules that looked like judgement calls
 turned out to be measurable, and each was settled by a census:
 
@@ -180,13 +190,13 @@ so it was left unmodelled rather than guessed at.
 
 | Production | Declines | What it is |
 |---|---:|---|
-| `spell_effect` | 21,268 | effect vocabulary — the real bottleneck |
+| `spell_effect` | 19,585 | effect vocabulary — the real bottleneck |
 | `trigger_effect` | 6,777 | trigger head parses, body does not |
-| `trigger_head` | 5,994 | unbuilt trigger events |
-| `activated_effect` | 5,159 | same body grammar, after a cost |
+| `trigger_head` | 5,910 | unbuilt trigger events |
+| `activated_effect` | 5,051 | same body grammar, after a cost |
 | `trigger_body` | 1,046 | head parses but no comma boundary follows |
 | `modal_bullet` | 953 | a mode whose own body does not parse |
-| `ability_cost` | 948 | remaining cost shapes |
+| `ability_cost` | 646 | remaining cost shapes |
 
 Three quarters of all declines are the EFFECT BODY grammar, reached through four
 different doors. Work there pays four times.

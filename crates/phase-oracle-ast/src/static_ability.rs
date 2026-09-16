@@ -38,7 +38,11 @@ pub enum Modification {
     },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// CR 509.1b: a blocking restriction naming WHICH creatures cannot block.
+///
+/// Externally tagged, because the engine prints the data-carrying mode as an
+/// object while every mode without data stays a bare string.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum StaticMode {
     Continuous,
     CantBlock,
@@ -48,6 +52,10 @@ pub enum StaticMode {
     CantBeBlocked,
     /// CR 508.1d: the object must be declared as an attacker if able.
     MustAttack,
+    /// CR 509.1b with a restriction on the blocker.
+    CantBeBlockedBy {
+        filter: crate::filter::TargetFilter,
+    },
 }
 
 /// CR 613.1: a game-state predicate that gates a continuous effect.

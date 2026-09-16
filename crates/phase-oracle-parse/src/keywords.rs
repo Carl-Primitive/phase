@@ -8,7 +8,7 @@
 
 use phase_oracle_ast::{
     AbilityCost, AbilityDefinition, AbilityKind, AbilityTag, ActivationRestriction, ControllerRef,
-    Effect, Keyword, KeywordCost, ManaColor, ManaCost, ProtectionQuality, StaticAbility,
+    CrewCost, Effect, Keyword, KeywordCost, ManaColor, ManaCost, ProtectionQuality, StaticAbility,
     TargetFilter, TypedFilter, WrappedKeywordCost,
 };
 
@@ -262,4 +262,23 @@ pub fn characteristic_keyword_line(i: In<'_>) -> Option<(Keyword, StaticAbility)
     sa.characteristic_defining = true;
     sa.description = None;
     Some((Keyword::Simple(printed.to_string()), sa))
+}
+
+/// `Crew <n>` — CR 702.122a.
+///
+/// The argument is a POWER threshold rather than a cost, so it carries its own
+/// shape rather than joining the costed-keyword table.
+pub fn crew_keyword(i: In<'_>) -> Option<(In<'_>, Keyword)> {
+    let (r, _) = word("crew")(i).ok()?;
+    let (r, power) = crate::prim::number(r).ok()?;
+    let power = u32::try_from(power).ok()?;
+    Some((
+        r,
+        Keyword::Crew {
+            crew: CrewCost {
+                power,
+                once_per_turn: None,
+            },
+        },
+    ))
 }
