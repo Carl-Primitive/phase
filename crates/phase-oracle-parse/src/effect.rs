@@ -7,7 +7,8 @@
 
 use phase_oracle_ast::{
     ChoiceTiming, ControllerRef, Duration, Effect, ManaColor, ManaProduced, ManaShard,
-    Modification, PlayerScope, Quantity, StaticAbility, TapScope, TapState, TargetFilter, ZoneName,
+    Modification, PlayerScope, Quantity, QuantityRef, StaticAbility, TapScope, TapState,
+    TargetFilter, ZoneName,
 };
 
 use crate::prim::{any_of, fail, phrase, phrase_alt, quantity, word, In, ManaSym, R};
@@ -124,14 +125,57 @@ fn acting_subject(s: &Subject) -> Subject {
     }
 }
 
+/// Scale a count by a trailing "for each <filter>" clause.
+///
+/// CR 107.3: the clause turns a constant into a COUNT of objects. A base of one
+/// is absorbed — "1 life for each creature you control" is the object count
+/// itself, not one times it — which is the engine's shape and also the only
+/// reading that makes `Multiply` mean something when it does appear.
+///
+/// Called AFTER the noun, because Magic prints the noun between the number and
+/// the clause that scales it ("1 LIFE for each creature"), so the quantity
+/// production cannot see it on its own.
+fn for_each(base: Quantity, i: In<'_>) -> (In<'_>, Quantity) {
+    // "equal to the number of X" is the same idea printed as a phrase rather
+    // than as a multiplier, and it REPLACES the base rather than scaling it.
+    if let Ok((r, _)) = phrase("equal to the number of")(i) {
+        if let Ok((r2, s)) = subject(r) {
+            return (
+                r2,
+                Quantity::Ref {
+                    qty: QuantityRef::ObjectCount { filter: s.filter },
+                },
+            );
+        }
+    }
+
+    let Ok((r, _)) = phrase("for each")(i) else {
+        return (i, base);
+    };
+    let Ok((r, s)) = subject(r) else {
+        return (i, base);
+    };
+    let count = QuantityRef::ObjectCount { filter: s.filter };
+    let scaled = match base {
+        Quantity::Fixed { value: 1 } => Quantity::Ref { qty: count },
+        Quantity::Fixed { value } => Quantity::Multiply {
+            factor: value,
+            inner: Box::new(Quantity::Ref { qty: count }),
+        },
+        // A dynamic base scaled by a second dynamic count is a shape the engine
+        // spells differently; decline by leaving the clause unconsumed.
+        _ => return (i, base),
+    };
+    (r, scaled)
+}
+
 /// Quantity-then-noun, where a bare noun means one: "draw a card" / "draw cards".
 fn count_of(i: In<'_>, noun: fn(In<'_>) -> R<'_, ()>) -> R<'_, Quantity> {
-    if let Ok((r, q)) = quantity(i) {
-        let (r, _) = noun(r)?;
-        return Ok((r, q));
-    }
-    let (r, _) = noun(i)?;
-    Ok((r, Quantity::fixed(1)))
+    let (r, base) = match quantity(i) {
+        Ok((r, q)) => (noun(r)?.0, q),
+        Err(_) => (noun(i)?.0, Quantity::fixed(1)),
+    };
+    Ok(for_each(base, r))
 }
 
 /// Build the single or mass zone-change effect.
@@ -785,6 +829,7 @@ fn predicate<'a>(s: &Subject, i: In<'a>) -> R<'a, Predicate> {
     if let Ok((r, _)) = any_of(&["gains", "gain", "has", "have"])(i) {
         if let Ok((r2, q)) = quantity(r) {
             if let Ok((r3, _)) = word("life")(r2) {
+                let (r3, q) = for_each(q, r3);
                 return Ok((
                     r3,
                     Predicate::Instant(
@@ -817,6 +862,7 @@ fn predicate<'a>(s: &Subject, i: In<'a>) -> R<'a, Predicate> {
     if let Ok((r, _)) = any_of(&["loses", "lose"])(i) {
         let (r, q) = quantity(r)?;
         let (r, _) = word("life")(r)?;
+        let (r, q) = for_each(q, r);
         // Unlike `GainLife`, the engine PRINTS the subject here even when it is
         // the controller. The two life effects genuinely disagree about this;
         // the mirror follows each of them rather than tidying either.

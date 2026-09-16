@@ -1917,3 +1917,46 @@ fn add_one_colour_or_another_is_a_choice_not_a_list() {
     let fixed = abilities("Dark Ritual", "Add {B}{B}{B}.");
     assert_eq!(fixed[0]["effect"]["produced"]["type"], "Fixed");
 }
+
+// ---------------------------------------------------------------------------
+// Counts that depend on the board
+// ---------------------------------------------------------------------------
+
+#[test]
+fn for_each_turns_a_constant_into_an_object_count() {
+    // CR 107.3. A base of ONE is absorbed: the engine emits the count itself,
+    // not one times it, which is also the only reading that leaves `Multiply`
+    // meaning something when it does appear.
+    let one = triggers(
+        "Whatever",
+        "When ~ enters, you gain 1 life for each creature you control.",
+    );
+    assert_eq!(
+        one[0]["execute"]["effect"]["amount"],
+        json!({
+            "type": "Ref",
+            "qty": {
+                "type": "ObjectCount",
+                "filter": {
+                    "type": "Typed",
+                    "type_filters": ["Creature"],
+                    "controller": "You",
+                    "properties": []
+                }
+            }
+        })
+    );
+
+    let two = triggers(
+        "Whatever",
+        "When ~ enters, you gain 2 life for each creature you control.",
+    );
+    assert_eq!(two[0]["execute"]["effect"]["amount"]["type"], "Multiply");
+    assert_eq!(two[0]["execute"]["effect"]["amount"]["factor"], 2);
+}
+
+#[test]
+fn equal_to_the_number_of_replaces_the_count_rather_than_scaling_it() {
+    let v = abilities("Whatever", "Draw a card for each creature you control.");
+    assert_eq!(v[0]["effect"]["count"]["qty"]["type"], "ObjectCount");
+}

@@ -26,15 +26,16 @@ divergence is always a parser bug and never a format disagreement.
 |---|---:|
 | Tokens emitted | 968,616 |
 | **Lexer coverage failures** | **0** |
-| Cards with every line parsed | 4,994 |
-| — of those, **byte-identical to the engine** | **4,748** |
-| — of those, disagreeing with the engine | 246 |
-| Match rate among fully-parsed cards | **95.1%** |
-| Whole-corpus exact-match rate | 13.4% |
-| Lines declined (the work list) | 45,565 |
-| Tests | 120 |
+| Cards with every line parsed | 6,286 |
+| — of those, **byte-identical to the engine** | **6,067** |
+| — of those, disagreeing with the engine | 213 |
+| — of those, where the ENGINE declined and we parsed | 6 |
+| Match rate among fully-parsed cards | **96.5%** |
+| Whole-corpus exact-match rate | 17.1% |
+| Lines declined (the work list) | 42,145 |
+| Tests | 157 |
 | Full test cycle | **0.33s** |
-| Source lines across the three crates | 8,059 |
+| Source lines across the three crates | 10825 |
 
 Comparison is over EVERY bucket the parser fills — `keywords`, `abilities`,
 `triggers`, `static_abilities` — INCLUDING each ability's `description` prose.
@@ -48,6 +49,10 @@ Two deliberate exceptions, both stated by the harness rather than hidden:
   `["Deathtouch","Flying"]` on A-Midnight Assassin and `["Flying","Deathtouch"]`
   on Aurora of Emrakul. Demanding sequence equality would measure their
   instability, not this parser's correctness.
+* **Cards where the ENGINE emitted `Unimplemented` and this parser produced a
+  real parse are counted as WINS, not regressions.** Six so far. `+2 Mace` is
+  the clearest: the engine's name normalization eats "+2/+2" into "~/~" and its
+  static parser then fails the line.
 * **21 cards have no Oracle-derived content.** A dual land's mana abilities come
   from its TYPE LINE, not from any sentence; its whole printed text is reminder
   text. The parser is not given the type line, so this is an input limit rather
@@ -168,29 +173,31 @@ so it was left unmodelled rather than guessed at.
 
 | Production | Declines | What it is |
 |---|---:|---|
-| `spell_effect` | 24,194 | effect vocabulary — the real bottleneck |
-| `trigger_effect` | 6,943 | trigger head parses, body does not |
-| `trigger_head` | 6,443 | unbuilt trigger events |
-| `activated_effect` | 5,759 | same body grammar, after a cost |
-| `ability_cost` | 1,197 | remaining cost shapes |
-| `trigger_body` | 1,029 | head parses but no comma boundary follows |
+| `spell_effect` | 21,268 | effect vocabulary — the real bottleneck |
+| `trigger_effect` | 6,777 | trigger head parses, body does not |
+| `trigger_head` | 5,994 | unbuilt trigger events |
+| `activated_effect` | 5,159 | same body grammar, after a cost |
+| `trigger_body` | 1,046 | head parses but no comma boundary follows |
+| `modal_bullet` | 953 | a mode whose own body does not parse |
+| `ability_cost` | 948 | remaining cost shapes |
 
 Three quarters of all declines are the EFFECT BODY grammar, reached through four
 different doors. Work there pays four times.
 
 Named classes visible in the decline samples, roughly by mass:
 
-1. **Modal spells** (~2,900 lines: "Choose one —" plus its `•` bullets).
-   Self-contained: `modal` + `mode_abilities` on the ability.
-2. **Conditions** (~2,100: "as long as", intervening-if, "if you control").
-   Careful — `ControlsType` and `IsPresent` are two engine spellings of
-   apparently the same thing; census the split before picking.
-3. **Effect verbs not yet built**: search library, look at, gain control,
-   prevent damage, copy, attach, dig, put onto the battlefield.
-4. **Keywords with a cost** (cycling, flashback, kicker, ward, crew, morph) —
-   each is a small grammar like `Equip`, and each lowers to the ability or
-   casting option the keyword stands for.
-5. **`~'s` possessive references** (247).
+1. **Keywords that generate BEHAVIOUR as well as an entry** — cycling,
+   flashback, evoke, bestow, madness, echo, unearth, buyback, megamorph. Each
+   needs the ability or replacement it stands for built before its keyword can
+   be hoisted; until then they decline on purpose. This is now the largest
+   identified block.
+2. **Conditions beyond "as long as you control X"** — intervening-if,
+   quantity comparisons, "if you've cast", counters-on checks.
+3. **Effect verbs not yet built**: look at, prevent damage, copy, dig, put onto
+   the battlefield, exile-top, reveal hand, delayed triggers.
+4. **`up to N target`** (`multi_target`), and the `~'s` possessive references.
+5. **Pronoun referents inside triggers** — needs the trigger's own event object
+   threaded into the parse context, which the `Ctx` struct already exists for.
 
 ---
 
