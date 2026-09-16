@@ -53,6 +53,13 @@ Two deliberate exceptions, both stated by the harness rather than hidden:
   real parse are counted as WINS, not regressions.** Six so far. `+2 Mace` is
   the clearest: the engine's name normalization eats "+2/+2" into "~/~" and its
   static parser then fails the line.
+* **Cards whose abilities come from the card's TYPE LINE are counted apart.**
+  A basic land's mana ability and a dual land's are not in its Oracle text —
+  its whole printed text is reminder text — and this parser is given only the
+  text. Synthesizing them belongs to the card-data pipeline that assembles a
+  card record, not to a grammar over sentences. 71 cards today and the number
+  grows with coverage, so it is reported on its own line rather than folded
+  into the stop-the-line count.
 * **21 cards have no Oracle-derived content.** A dual land's mana abilities come
   from its TYPE LINE, not from any sentence; its whole printed text is reminder
   text. The parser is not given the type line, so this is an input limit rather

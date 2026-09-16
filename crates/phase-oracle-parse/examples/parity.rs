@@ -91,6 +91,7 @@ fn main() {
     let mut exact = 0usize;
     let mut regressions = 0usize;
     let mut improvements = 0usize;
+    let mut type_line = 0usize;
     let mut declined_lines = 0usize;
     let mut by_production: BTreeMap<&'static str, usize> = BTreeMap::new();
     // Every Nth decline per production, so the sample spans the corpus instead
@@ -284,8 +285,17 @@ fn main() {
         } else {
             "abilities differ"
         };
-        if bucket != "engine declined, we parsed" {
-            regressions += 1;
+        // Two buckets are NOT grammar defects and are counted apart from the
+        // stop-the-line number, which exists to mean "a card the engine gets
+        // right and we get wrong":
+        //   - the engine itself declined the card;
+        //   - the engine's abilities come from the card's TYPE LINE, which this
+        //     parser is never given.
+        // Everything else counts.
+        match bucket {
+            "engine declined, we parsed" => {}
+            "type-line ability, not in the text" => type_line += 1,
+            _ => regressions += 1,
         }
         *mismatch_bucket.entry(bucket).or_default() += 1;
 
@@ -328,6 +338,7 @@ fn main() {
     println!("  of those, EXACT match vs engine     {exact}");
     println!("  of those, DISAGREE with engine      {regressions}   <-- stop-the-line");
     println!("  of those, engine declined, we parsed {improvements}");
+    println!("  of those, type-line only (not in text) {type_line}");
     if complete > 0 {
         println!(
             "exact-match rate among complete cards {:.1}%",
