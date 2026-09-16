@@ -8,8 +8,8 @@
 
 use phase_oracle_ast::{
     AbilityCost, AbilityDefinition, AbilityKind, AbilityTag, ActivationRestriction, ControllerRef,
-    CrewCost, Effect, Keyword, KeywordCost, ManaColor, ManaCost, ProtectionQuality, StaticAbility,
-    TargetFilter, TypedFilter, WrappedKeywordCost,
+    CrewCost, Effect, Keyword, KeywordCost, ManaColor, ManaCost, PartnerVariant, ProtectionQuality,
+    StaticAbility, TargetFilter, TypedFilter, WrappedKeywordCost,
 };
 
 use crate::cost::ability_cost;
@@ -281,4 +281,22 @@ pub fn crew_keyword(i: In<'_>) -> Option<(In<'_>, Keyword)> {
             },
         },
     ))
+}
+
+/// The partner family — CR 702.124.
+///
+/// Hoisted as a bare entry because it is a DECK-CONSTRUCTION rule with no
+/// gameplay behaviour: nothing is dropped by recording only the keyword. That
+/// is what separates it from Storm, Exalted and Flanking, which print as bare
+/// words too but each stand for a trigger.
+pub fn partner_keyword(i: In<'_>) -> Option<(In<'_>, Keyword)> {
+    const VARIANTS: &[(&str, PartnerVariant)] = &[
+        ("choose a background", PartnerVariant::ChooseABackground),
+        ("doctor's companion", PartnerVariant::DoctorsCompanion),
+        ("doctors companion", PartnerVariant::DoctorsCompanion),
+        ("friends forever", PartnerVariant::FriendsForever),
+        ("partner", PartnerVariant::Generic),
+    ];
+    let (r, variant) = crate::prim::phrase_alt(VARIANTS)(i).ok()?;
+    Some((r, Keyword::Partner { variant }))
 }

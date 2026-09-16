@@ -647,7 +647,10 @@ fn player_target(i: In<'_>) -> R<'_, Subject> {
     // CR 201.5: "this card" is a self-reference the engine deliberately does
     // NOT normalize to `~`, because it is context-dependent — but in subject
     // position it is still the source.
-    if let Ok((r, _)) = phrase("this card")(i) {
+    // CR 201.5: neither of these is normalized to `~` — the engine keeps them
+    // on a parse-only list because they are context-dependent — but in SUBJECT
+    // position both name the source.
+    if let Ok((r, _)) = phrase_alt(&[("this card", ()), ("this spell", ())])(i) {
         return Ok((r, Subject::single(TargetFilter::SelfRef)));
     }
     if let Ok((r, _)) = word("you")(i) {

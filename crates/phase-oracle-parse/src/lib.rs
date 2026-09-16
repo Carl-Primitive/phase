@@ -79,10 +79,14 @@ pub fn parse_card(name: &str, oracle: &str) -> CardParse {
     // header's counts are held until the modes have been collected.
     let mut modal: Option<(usize, usize)> = None;
     let mut modes: Vec<String> = Vec::new();
+    // When the header belonged to a TRIGGER, the modes fill that trigger's
+    // execute instead of the card's own modal block.
+    let mut modal_trigger: Option<usize> = None;
 
     for l in line::lines(&toks, &src) {
         if let Some(counts) = modal_header(&l, &src) {
             modal = Some(counts);
+            modal_trigger = None;
             continue;
         }
         if let Some(body) = strip_bullet(&l, &src) {
@@ -98,7 +102,14 @@ pub fn parse_card(name: &str, oracle: &str) -> CardParse {
                         Some(mut a) => {
                             a.description = None;
                             modes.push(body.description.clone());
-                            out.abilities.push(a);
+                            // A trigger's modes live on the trigger; a spell's
+                            // live in the card's abilities array.
+                            match modal_trigger {
+                                Some(idx) => {
+                                    out.triggers[idx].execute.mode_abilities.push(a);
+                                }
+                                None => out.abilities.push(a),
+                            }
                         }
                         None => declines.push(decline(
                             &l,
@@ -133,6 +144,11 @@ pub fn parse_card(name: &str, oracle: &str) -> CardParse {
             Ok(Lowered::Replacement(r)) => out.replacements.push(*r),
             Ok(Lowered::Ability(a)) => out.abilities.push(*a),
             Ok(Lowered::Trigger(t)) => out.triggers.push(*t),
+            Ok(Lowered::TriggerWithModal(t, counts)) => {
+                out.triggers.push(*t);
+                modal = Some(counts);
+                modal_trigger = Some(out.triggers.len() - 1);
+            }
             Err(d) => declines.push(d),
         }
     }
@@ -146,16 +162,29 @@ pub fn parse_card(name: &str, oracle: &str) -> CardParse {
         // "Choose one or more" caps at the number of modes printed, which is
         // only known once they have all been read.
         let mode_count = modes.len();
-        if mode_count == 0 {
-            out.modal = None;
-        } else {
-            out.modal = Some(phase_oracle_ast::ModalChoice {
+        if mode_count > 0 {
+            let block = phase_oracle_ast::ModalChoice {
                 min_choices,
                 max_choices: max_raw.min(mode_count).max(min_choices),
                 mode_count,
                 mode_descriptions: modes,
                 allow_repeat_modes: false,
                 chooser: phase_oracle_ast::TargetFilter::Controller,
+            };
+            match modal_trigger {
+                Some(idx) => out.triggers[idx].execute.modal = Some(block),
+                None => out.modal = Some(block),
+            }
+        } else if let Some(idx) = modal_trigger {
+            // A modal header with no modes under it is not a modal ability;
+            // the trigger would otherwise keep an empty placeholder.
+            out.triggers[idx].execute.modal = None;
+            declines.push(line::Decline {
+                production: "modal_header",
+                reason: line::DeclineReason::UnknownLineShape,
+                text: out.triggers[idx].description.clone().unwrap_or_default(),
+                start: 0,
+                end: 0,
             });
         }
     }
@@ -205,6 +234,9 @@ enum Lowered {
     /// A spell line, left unassembled so consecutive ones can fold together.
     SpellBody(Vec<line::Part>, String, bool),
     Replacement(Box<phase_oracle_ast::Replacement>),
+    /// A trigger whose body is a modal header; its modes are the bullet lines
+    /// that follow.
+    TriggerWithModal(Box<TriggerDefinition>, (usize, usize)),
     /// A line that is the permanent's own continuous ability. CR 611.2: an
     /// effect with no printed end lasts as long as its source, so it is not
     /// something a spell does — it is something the permanent IS.
@@ -323,7 +355,7 @@ fn parse_line(l: &Line<'_>, src: &str) -> Result<Lowered, Decline> {
     }
 
     if trigger::looks_like_trigger(stream) {
-        return triggered_line(l, src).map(|t| Lowered::Trigger(Box::new(t)));
+        return triggered_line(l, src);
     }
 
     spell_line(l, src)
@@ -386,6 +418,8 @@ fn mode_only_static(l: &Line<'_>, src: &str) -> Option<phase_oracle_ast::StaticA
         ("can't attack", StaticMode::CantAttack),
         ("cant attack", StaticMode::CantAttack),
         ("attacks each combat if able", StaticMode::MustAttack),
+        ("can't be countered", StaticMode::CantBeCountered),
+        ("cant be countered", StaticMode::CantBeCountered),
         (
             "doesn't untap during your untap step",
             StaticMode::CantUntap,
@@ -501,7 +535,11 @@ fn enters_replacement(l: &Line<'_>, src: &str) -> Option<phase_oracle_ast::Repla
 /// "one or more" is the mode COUNT, which the caller resolves once the bullets
 /// have been read; `usize::MAX` stands for it here.
 fn modal_header(l: &Line<'_>, src: &str) -> Option<(usize, usize)> {
-    let stream = Tokens::new(l.toks, src);
+    modal_header_tokens(l.toks, src)
+}
+
+fn modal_header_tokens(toks: &[Token], src: &str) -> Option<(usize, usize)> {
+    let stream = Tokens::new(toks, src);
     let (rest, _) = prim::word("choose")(stream).ok()?;
 
     const COUNTS: &[(&str, (usize, usize))] = &[
@@ -654,6 +692,9 @@ fn bare_keyword(i: Tokens<'_>) -> Option<(Tokens<'_>, Keyword)> {
     if let Some(v) = keywords::crew_keyword(i) {
         return Some(v);
     }
+    if let Some(v) = keywords::partner_keyword(i) {
+        return Some(v);
+    }
     if let Some(v) = keywords::costed_keyword(i) {
         return Some(v);
     }
@@ -750,7 +791,7 @@ fn split_activation_restrictions<'a>(
 }
 
 /// `<trigger event>, <effect>` — a triggered ability. CR 603.
-fn triggered_line(l: &Line<'_>, src: &str) -> Result<TriggerDefinition, Decline> {
+fn triggered_line(l: &Line<'_>, src: &str) -> Result<Lowered, Decline> {
     let stream = Tokens::new(l.toks, src);
     let Ok((rest, head)) = trigger::trigger_head(stream) else {
         return Err(decline(l, "trigger_head", DeclineReason::UnknownLineShape));
@@ -773,6 +814,21 @@ fn triggered_line(l: &Line<'_>, src: &str) -> Result<TriggerDefinition, Decline>
         Err(_) => (body, false),
     };
 
+    // CR 700.2: the trigger's body may BE a modal header, in which case the
+    // modes are the bullet lines that follow and the trigger's own execute is
+    // an empty placeholder until they have been read.
+    if let Some(counts) = modal_header_tokens(body.toks, src) {
+        let mut td = trigger_shell(l, &head, optional);
+        // The engine's description for a modal trigger is the EVENT alone:
+        // "When ~ enters", with no ", choose one —". The header is metadata
+        // about the modes, and the modes carry their own prose, so repeating it
+        // here would say the same thing twice.
+        let head_len = l.toks.len() - rest.toks.len();
+        td.description = Some(line::render(&l.toks[..head_len], src));
+        td.execute.modal = Some(placeholder_modal(counts));
+        return Ok(Lowered::TriggerWithModal(Box::new(td), counts));
+    }
+
     let parts = effect_chain_in(body.toks, src, true)
         .ok_or_else(|| decline(l, "trigger_effect", DeclineReason::UnknownVerb))?;
 
@@ -787,7 +843,7 @@ fn triggered_line(l: &Line<'_>, src: &str) -> Result<TriggerDefinition, Decline>
     // executes, which decides whether the controller performs the action.
     execute.optional = optional;
 
-    let mut td = TriggerDefinition::new(head.mode, execute);
+    let mut td = TriggerDefinition::new(head.mode.clone(), execute);
     td.valid_card = head.valid_card;
     td.origin = head.origin;
     td.destination = head.destination;
@@ -806,7 +862,45 @@ fn triggered_line(l: &Line<'_>, src: &str) -> Result<TriggerDefinition, Decline>
     td.optional = optional;
     td.trigger_zones = trigger_zones(&td);
     td.description = Some(l.description.clone());
-    Ok(td)
+    Ok(Lowered::Trigger(Box::new(td)))
+}
+
+/// A trigger carrying everything its HEAD established, with an empty execute.
+///
+/// Split out because a modal trigger has to exist before its modes are read:
+/// the bullets that fill it are separate printed lines.
+fn trigger_shell(l: &Line<'_>, head: &trigger::TriggerHead, optional: bool) -> TriggerDefinition {
+    use phase_oracle_ast::Effect;
+
+    let execute = AbilityDefinition::spell(Effect::GenericEffect {
+        static_abilities: Vec::new(),
+        duration: None,
+        target: None,
+    });
+    let mut td = TriggerDefinition::new(head.mode.clone(), execute);
+    td.valid_card = head.valid_card.clone();
+    td.origin = head.origin;
+    td.destination = head.destination;
+    td.phase = head.phase;
+    td.valid_source = head.valid_source.clone();
+    td.valid_target = head.valid_target.clone();
+    td.constraint = head.constraint.clone();
+    td.optional = optional;
+    td.trigger_zones = trigger_zones(&td);
+    td.description = Some(l.description.clone());
+    td
+}
+
+/// A modal block with no modes yet; the counts are fixed once they are read.
+fn placeholder_modal(counts: (usize, usize)) -> phase_oracle_ast::ModalChoice {
+    phase_oracle_ast::ModalChoice {
+        min_choices: counts.0,
+        max_choices: counts.1,
+        mode_count: 0,
+        mode_descriptions: Vec::new(),
+        allow_repeat_modes: false,
+        chooser: phase_oracle_ast::TargetFilter::Controller,
+    }
 }
 
 /// Where the source must be for this trigger to function. CR 603.6.

@@ -56,6 +56,8 @@ pub enum StaticMode {
     CantBeBlockedBy {
         filter: crate::filter::TargetFilter,
     },
+    /// CR 701.5a: the spell cannot be countered.
+    CantBeCountered,
 }
 
 /// CR 613.1: a game-state predicate that gates a continuous effect.

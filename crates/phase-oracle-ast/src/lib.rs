@@ -44,7 +44,7 @@ pub use replacement::{Replacement, ReplacementEvent, ReplacementMode};
 pub use static_ability::{Condition, Modification, StaticAbility, StaticMode};
 pub use trigger::{DamageKindFilter, PhaseName, TriggerDefinition, TriggerMode};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// Everything one card's Oracle text lowers to.
 ///
@@ -78,6 +78,13 @@ pub enum Keyword {
         #[serde(rename = "Protection")]
         quality: ProtectionQuality,
     },
+    /// CR 702.124: the partner family. A DECK-CONSTRUCTION rule with no
+    /// gameplay behaviour, which is why it can be hoisted as a bare entry while
+    /// keywords like Storm and Exalted cannot.
+    Partner {
+        #[serde(rename = "Partner")]
+        variant: PartnerVariant,
+    },
     /// CR 702.122a: "Crew 2". The argument is a POWER threshold rather than a
     /// cost, so it carries its own shape.
     Crew {
@@ -90,6 +97,16 @@ pub enum Keyword {
     /// own name rather than tagging it. The payload SHAPE differs by keyword
     /// and is not something the printed text reveals — see [`KeywordCost`].
     Costed(std::collections::BTreeMap<String, KeywordCost>),
+}
+
+/// Which partner rule a card uses. CR 702.124.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(tag = "type")]
+pub enum PartnerVariant {
+    Generic,
+    ChooseABackground,
+    DoctorsCompanion,
+    FriendsForever,
 }
 
 /// CR 702.122a: the total power that must be tapped to crew.
@@ -135,7 +152,7 @@ pub enum WrappedKeywordCost {
 /// controller picks — which is why `mode_count` and the array length must
 /// agree, and why each mode's own `description` is null while their printed
 /// text is repeated here.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModalChoice {
     pub min_choices: usize,
     pub max_choices: usize,

@@ -122,6 +122,13 @@ pub struct AbilityDefinition {
     pub optional_targeting: bool,
     /// CR 608.2d: "You may …".
     pub optional: bool,
+    /// CR 700.2: modal metadata, when this ability pauses for a mode choice.
+    /// The modes themselves live in `mode_abilities`, so the two are always set
+    /// together.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub modal: Option<crate::ModalChoice>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub mode_abilities: Vec<AbilityDefinition>,
     pub forward_result: bool,
     /// CR 101.4: when set, the effect is performed once per matching player,
     /// each becoming the acting player in APNAP order. "Each opponent mills a
@@ -169,6 +176,8 @@ impl AbilityDefinition {
             condition: None,
             optional_targeting: false,
             optional: false,
+            modal: None,
+            mode_abilities: Vec::new(),
             forward_result: false,
             multi_target: None,
             player_scope: None,

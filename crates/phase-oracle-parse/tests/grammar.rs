@@ -2278,3 +2278,67 @@ fn a_blocking_restriction_can_name_who_is_stopped() {
     );
     assert_eq!(v[0]["affected"], json!({"type": "SelfRef"}));
 }
+
+// ---------------------------------------------------------------------------
+// Modal triggers, partner, and the counter-proof static
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_triggers_body_can_be_a_modal_header() {
+    // CR 700.2. The modes fill the TRIGGER's execute rather than the card's
+    // abilities array, and the execute's own effect is an empty placeholder —
+    // choosing a mode is what it does.
+    let v = triggers(
+        "Blade of the Swarm",
+        "When this creature enters, choose one —\n• Put two +1/+1 counters on this creature.\n• Draw a card.",
+    );
+    let ex = &v[0]["execute"];
+    assert_eq!(
+        ex["effect"],
+        json!({"type": "GenericEffect", "static_abilities": [], "duration": null, "target": null})
+    );
+    assert_eq!(ex["modal"]["mode_count"], 2);
+    assert_eq!(
+        ex["modal"]["mode_descriptions"],
+        json!(["Put two +1/+1 counters on ~.", "Draw a card."])
+    );
+    assert_eq!(ex["mode_abilities"].as_array().expect("array").len(), 2);
+    assert_eq!(ex["mode_abilities"][0]["effect"]["type"], "PutCounter");
+
+    // The description is the EVENT alone. The header is metadata about the
+    // modes and the modes carry their own prose, so repeating it would say the
+    // same thing twice.
+    assert_eq!(v[0]["description"], "When ~ enters");
+}
+
+#[test]
+fn a_modal_header_with_no_modes_under_it_is_not_a_modal_ability() {
+    let p = parse_card("Whatever", "When ~ enters, choose one —");
+    assert!(!p.is_complete());
+}
+
+#[test]
+fn partner_is_hoistable_because_it_is_a_deck_rule() {
+    // CR 702.124: no gameplay behaviour, so nothing is dropped by recording
+    // only the keyword — which is what separates it from Storm and Exalted,
+    // bare words that each stand for a trigger.
+    assert_eq!(
+        parsed("Whatever", "Partner")["keywords"],
+        json!([{"Partner": {"type": "Generic"}}])
+    );
+    assert_eq!(
+        parsed("Whatever", "Choose a Background")["keywords"],
+        json!([{"Partner": {"type": "ChooseABackground"}}])
+    );
+}
+
+#[test]
+fn this_spell_names_the_source_without_being_normalized() {
+    // CR 201.5: the engine keeps "this spell" off the `~` list because it is
+    // context-dependent, so the description shows the printed words — but in
+    // SUBJECT position it still names the source.
+    let v = parsed("Whatever", "This spell can't be countered.")["static_abilities"].clone();
+    assert_eq!(v[0]["mode"], "CantBeCountered");
+    assert_eq!(v[0]["affected"], json!({"type": "SelfRef"}));
+    assert_eq!(v[0]["description"], "This spell can't be countered.");
+}
