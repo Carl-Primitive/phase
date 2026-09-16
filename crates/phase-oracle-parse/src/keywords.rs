@@ -8,7 +8,8 @@
 
 use phase_oracle_ast::{
     AbilityCost, AbilityDefinition, AbilityKind, AbilityTag, ActivationRestriction, ControllerRef,
-    Effect, Keyword, KeywordCost, ManaCost, TargetFilter, TypedFilter, WrappedKeywordCost,
+    Effect, Keyword, KeywordCost, ManaColor, ManaCost, ProtectionQuality, TargetFilter,
+    TypedFilter, WrappedKeywordCost,
 };
 
 use crate::cost::ability_cost;
@@ -207,4 +208,30 @@ pub fn cycling_line(i: In<'_>) -> Option<(Keyword, AbilityDefinition)> {
     a.activation_zone = Some(phase_oracle_ast::Zone::Hand);
     a.ability_tag = Some(AbilityTag::Cycling);
     Some((Keyword::Costed(map), a))
+}
+
+/// `protection from <quality>` — CR 702.16.
+///
+/// The quality is the keyword's argument, so it is keyed by name the way a cost
+/// is. Only the colour and multicolour forms are built; "protection from
+/// artifacts" and the card-type forms carry a different payload and decline.
+pub fn protection_keyword(i: In<'_>) -> Option<(In<'_>, Keyword)> {
+    let (r, _) = crate::prim::phrase("protection from")(i).ok()?;
+    let quality = protection_quality(r)?;
+    Some((quality.0, Keyword::Protection { quality: quality.1 }))
+}
+
+fn protection_quality(i: In<'_>) -> Option<(In<'_>, ProtectionQuality)> {
+    const COLORS: &[(&str, ManaColor)] = &[
+        ("white", ManaColor::White),
+        ("blue", ManaColor::Blue),
+        ("black", ManaColor::Black),
+        ("red", ManaColor::Red),
+        ("green", ManaColor::Green),
+    ];
+    if let Ok((r, c)) = crate::prim::phrase_alt(COLORS)(i) {
+        return Some((r, ProtectionQuality::Color(c)));
+    }
+    let (r, _) = crate::prim::phrase("multicolored")(i).ok()?;
+    Some((r, ProtectionQuality::Multicolored))
 }

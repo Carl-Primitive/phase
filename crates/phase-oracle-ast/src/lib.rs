@@ -40,6 +40,7 @@ pub use filter::{
 };
 pub use qty::{Quantity, QuantityRef, StatScope};
 pub use replacement::{Replacement, ReplacementEvent, ReplacementMode};
+
 pub use static_ability::{Condition, Modification, StaticAbility, StaticMode};
 pub use trigger::{DamageKindFilter, PhaseName, TriggerDefinition, TriggerMode};
 
@@ -71,12 +72,25 @@ pub enum Keyword {
         #[serde(rename = "Enchant")]
         filter: TargetFilter,
     },
+    /// CR 702.16: "protection from black". The quality protected from is the
+    /// keyword's argument, so it is keyed the same way a cost is.
+    Protection {
+        #[serde(rename = "Protection")]
+        quality: ProtectionQuality,
+    },
     /// A keyword printed with a cost: "Flashback {1}{B}", "Morph {2}{U}".
     ///
     /// A one-entry map, because the engine keys the payload by the keyword's
     /// own name rather than tagging it. The payload SHAPE differs by keyword
     /// and is not something the printed text reveals — see [`KeywordCost`].
     Costed(std::collections::BTreeMap<String, KeywordCost>),
+}
+
+/// What a protection keyword protects from. CR 702.16e.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub enum ProtectionQuality {
+    Color(filter::ManaColor),
+    Multicolored,
 }
 
 /// The payload a costed keyword carries.

@@ -296,6 +296,13 @@ fn parse_line(l: &Line<'_>, src: &str) -> Result<Lowered, Decline> {
         return activated_line(l, src, colon).map(|a| Lowered::Ability(Box::new(a)));
     }
 
+    // CR 509.1b: "~ can't be blocked" grants no modification — the whole
+    // ability IS the mode — so it is a static with an empty modification list
+    // rather than anything the effect grammar could produce.
+    if let Some(sa) = cant_be_blocked(l, src) {
+        return Ok(Lowered::Statics(vec![sa]));
+    }
+
     // CR 614.1: "~ enters tapped" changes the zone-change event as it happens
     // rather than resolving, so it belongs in `replacements` and not among the
     // abilities. It is matched before the spell grammar because "enters" would
@@ -349,6 +356,24 @@ fn static_description(line: &str) -> String {
 /// real sentence after it. Two shapes are deliberately NOT stripped: a chapter
 /// head ("I —", "II, III —"), whose numeral is structural, and a modal header
 /// ("Choose one —"), which has nothing after the dash on its own line.
+/// `<subject> can't be blocked.` — CR 509.1b.
+fn cant_be_blocked(l: &Line<'_>, src: &str) -> Option<phase_oracle_ast::StaticAbility> {
+    use phase_oracle_ast::{StaticAbility, StaticMode};
+
+    let stream = Tokens::new(l.toks, src);
+    let (rest, s) = target::subject(stream).ok()?;
+    let (rest, _) =
+        prim::phrase_alt(&[("can't be blocked", ()), ("cant be blocked", ())])(rest).ok()?;
+    if !line::is_exhausted(rest) {
+        return None;
+    }
+
+    let mut sa = StaticAbility::continuous(s.filter, Vec::new());
+    sa.mode = StaticMode::CantBeBlocked;
+    sa.description = Some(l.description.clone());
+    Some(sa)
+}
+
 /// `~ enters tapped.` — CR 614.1c.
 ///
 /// The commonest replacement in the corpus by a wide margin. The engine spells
@@ -537,6 +562,9 @@ fn bare_keyword(i: Tokens<'_>) -> Option<(Tokens<'_>, Keyword)> {
                 },
             ));
         }
+    }
+    if let Some(v) = keywords::protection_keyword(i) {
+        return Some(v);
     }
     if let Some(v) = keywords::costed_keyword(i) {
         return Some(v);

@@ -36,6 +36,8 @@ pub enum StaticMode {
     CantBlock,
     CantAttack,
     CantUntap,
+    /// CR 509.1b: the object cannot be chosen as a blocker's target.
+    CantBeBlocked,
 }
 
 /// CR 613.1: a game-state predicate that gates a continuous effect.

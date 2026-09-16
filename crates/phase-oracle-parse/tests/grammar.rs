@@ -2085,3 +2085,48 @@ fn a_mixed_keyword_line_takes_all_three_spellings() {
         json!(["Flying", {"Landwalk": "Swamp"}])
     );
 }
+
+// ---------------------------------------------------------------------------
+// Protection, and an ability that is nothing but a mode
+// ---------------------------------------------------------------------------
+
+#[test]
+fn protection_carries_the_quality_it_protects_from() {
+    // CR 702.16. The quality is the keyword's argument, keyed by name the way a
+    // cost is.
+    let v = parsed("Whatever", "Flying, protection from black");
+    assert_eq!(
+        v["keywords"],
+        json!(["Flying", {"Protection": {"Color": "Black"}}])
+    );
+}
+
+#[test]
+fn an_unbuilt_protection_quality_declines() {
+    // "Protection from artifacts" carries a different payload; guessing the
+    // colour form would protect from the wrong thing.
+    let p = parse_card("Whatever", "Protection from artifacts");
+    assert!(!p.is_complete());
+}
+
+#[test]
+fn cant_be_blocked_is_a_mode_with_no_modifications() {
+    // CR 509.1b. The whole ability IS the mode, so this is a static with an
+    // empty modification list rather than anything the effect grammar could
+    // produce — there is no effect here to lower.
+    let v = parsed("Whatever", "This creature can't be blocked.")["static_abilities"].clone();
+    assert_eq!(
+        v,
+        json!([{
+            "mode": "CantBeBlocked",
+            "affected": {"type": "SelfRef"},
+            "modifications": [],
+            "condition": null,
+            "affected_zone": null,
+            "effect_zone": null,
+            "active_zones": [],
+            "characteristic_defining": false,
+            "description": "~ can't be blocked."
+        }])
+    );
+}
